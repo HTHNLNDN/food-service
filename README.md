@@ -1,7 +1,7 @@
 # food-service
 
-A small, single-tenant agentic app that builds a weekday (Mon–Fri) lunch + dinner plan for
-two people, grounded in current Danish grocery offers, with **deterministic** macros and a
+A small, single-tenant agentic app that builds a weekday (Mon–Fri) dinner plan for
+n-amount of people, grounded in current Danish grocery offers, with **deterministic** macros and a
 **provider-agnostic** recipe agent. Local-first — runs on your machine, no cloud, no accounts.
 
 > Built for me and my wife; shared under a noncommercial license so anyone can clone and
@@ -91,7 +91,7 @@ uv run pytest tests/test_e2e_ui.py
   slice computes macros. This is why macros are trustworthy regardless of model.
 - **Offers are Danish free-text** (no product IDs), so ingredient→offer matching is
   best-effort; unmatched items are listed at unknown price. Offer *biasing* happens at the
-  recipe level.
+  recipe level. This also means that if a name brand dtable in onoffer, that will be shown, which is likely more expensive than the dkscount counterpart.
 - **KISS:** SQLite (not a vector DB), plain form POSTs (not HTMX), one adapter for all
   providers.
 
