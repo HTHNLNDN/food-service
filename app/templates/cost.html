@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>LLM cost</h2>
+{% if totals.n == 0 %}
+<p class="lead">No LLM calls logged yet. Plan a week, then come back.</p>
+{% else %}
+<p class="lead">{{ totals.n }} calls · <b>${{ '%.2f'|format(totals.usd) }}</b> total <span class="muted">(estimated)</span></p>
+{% if unpriced %}
+<p class="notice">No price set for: {{ unpriced|join(', ') }} — add a row to the
+<code>model_prices</code> table so these are costed.</p>
+{% endif %}
+
+<h3>By call type</h3>
+<div class="scrollx"><table class="grid">
+  <thead><tr><th>Call</th><th>Model</th><th>n</th><th>in tok</th><th>out tok</th>
+    <th>search</th><th>$</th><th>ms/call</th><th>retries</th><th>err</th></tr></thead>
+  <tbody>
+  {% for r in by_type %}
+  <tr><td>{{ r.call_type }}</td><td>{{ r.model }}</td><td>{{ r.n }}</td><td>{{ r.in_tok }}</td>
+    <td>{{ r.out_tok }}</td><td>{{ r.sq }}</td><td>${{ '%.3f'|format(r.usd) }}</td>
+    <td>{{ (r.avg_ms or 0)|round|int }}</td><td>{{ r.retries }}</td><td>{{ r.errs }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+
+<h3>Recent plans — cost vs. outcome</h3>
+<div class="scrollx"><table class="grid">
+  <thead><tr><th>Plan</th><th>When</th><th>$</th><th>revises</th><th>dinners</th>
+    <th>flagged</th><th>$/dinner</th></tr></thead>
+  <tbody>
+  {% for p in plans %}
+  <tr><td>#{{ p.id }}</td><td>{{ p.created_at[:10] }}</td><td>${{ '%.3f'|format(p.usd) }}</td>
+    <td>{{ p.revises }}</td><td>{{ p.dinners }}</td><td>{{ p.flagged }}</td>
+    <td>{% if p.dinners %}${{ '%.3f'|format(p.usd / p.dinners) }}{% else %}—{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+
+<p class="muted">Costs are estimates from the editable <code>model_prices</code> table. Plan $
+covers generation (grounding + revises + nutrition); shopping offer-matching is tracked above
+under "By call type". Fewer revises &amp; a lower $/dinner mean tokens are better spent.</p>
+{% endif %}
+
+{% if trends %}
+<h3>Trends by week</h3>
+<div class="scrollx"><table class="grid">
+  <thead><tr><th>Week</th><th>plans</th><th>dinners</th><th>off-target %</th>
+    <th>revises/plan</th><th>$/plan</th></tr></thead>
+  <tbody>
+  {% for t in trends %}
+  <tr><td>{{ t.week }}</td><td>{{ t.plans }}</td><td>{{ t.dinners }}</td>
+    <td>{{ '%.0f'|format(t.off_target) }}%</td><td>{{ '%.1f'|format(t.revises_per_plan) }}</td>
+    <td>${{ '%.3f'|format(t.usd_per_plan) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+<p class="muted">Efficacy over time — a lower off-target % and fewer revises/plan mean the tokens
+are working. (Plans before cost logging show $0.)</p>
+{% endif %}
+{% endblock %}

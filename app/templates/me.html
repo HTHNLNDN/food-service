@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>My data</h2>
+<p class="lead">Everything the app stores about you. Download it any time.</p>
+<ul class="downloads">
+  <li><a href="/me/all.json">Full export (JSON)</a> — preferences, plans, recipes, ratings</li>
+  <li><a href="/me/ratings.csv">Ratings (CSV)</a></li>
+  <li><a href="/me/database.db">Raw database (SQLite file)</a></li>
+</ul>
+
+<h3>Rating history</h3>
+{% if ratings %}
+<table class="schedule">
+  <thead><tr><th>When</th><th>Dish</th><th>Rating</th></tr></thead>
+  <tbody>
+    {% for r in ratings %}
+    <tr><td class="muted">{{ r.created_at[:10] }}</td><td>{{ r.title }}</td>
+        <td>{{ "👍" if r.score > 0 else "👎" }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No ratings yet.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block content %}
+{% if planning %}
+<div class="page-head"><h2>Planning your week…</h2></div>
+<div class="planning">
+  <p class="lead">Writing recipes and checking macros against your targets.</p>
+  <p class="muted">This usually takes a minute or two. The page updates on its own — you can lock
+  your phone and come back.</p>
+  <p class="spinner" aria-hidden="true">⏳</p>
+</div>
+<script>setTimeout(function(){ location.reload(); }, 3000);</script>
+{% else %}
+<div class="page-head">
+  <h2>This week's dinners</h2>
+  <div class="head-actions">
+    {% if plan %}<a class="link" href="/shopping">🛒 Shopping list</a>
+    <a class="link" href="/print">🖨 Print recipes</a>{% endif %}
+    <form method="post" action="/plan" onsubmit="showBusy()" class="plan-form">
+      <label class="use-up">Using up any ingredients this week? <span class="muted">(optional)</span>
+        <input type="text" name="use_up" value="{{ plan.use_up if plan else '' }}"
+               placeholder="e.g. 3 kg chicken breast, freezer veg">
+      </label>
+      <button type="submit">{{ "Re-plan this week" if plan else "Plan this week" }}</button>
+    </form>
+  </div>
+</div>
+
+{% if error %}<p class="error">⚠ {{ error }}</p>{% endif %}
+
+<div id="busy" class="busy">
+  <div>
+    <p><strong>Planning your week…</strong></p>
+    <p class="muted">Writing recipes and checking macros against your targets — this can take a minute or two.</p>
+  </div>
+</div>
+<script>function showBusy(){ document.getElementById('busy').classList.add('show'); }</script>
+
+{% if not llm_ready %}
+<p class="notice">Set <code>LLM_BASE_URL</code>, <code>LLM_MODEL</code> and <code>LLM_API_KEY</code>
+in <code>.env</code> to enable planning (see <code>.env.example</code>).</p>
+{% endif %}
+
+{% if not plan %}
+<p class="lead">No plan yet. Pick your preferences, then plan the week.</p>
+{% else %}
+
+<div class="cards">
+  {% for r in plan.recipes %}
+  <article class="card{% if r.flagged %} flagged{% endif %}">
+    <div class="card-head">
+      <h3>{{ r.title }}</h3>
+      {% if r.flagged %}<span class="badge" title="Macros could not be verified within targets">off-target</span>{% endif %}
+    </div>
+    <p class="macros">
+      {{ r.per_serving.kcal | round | int }} kcal ·
+      {{ r.per_serving.protein_g | round | int }} g protein ·
+      {{ r.per_serving.fibre_g | round | int }} g fibre ·
+      {{ r.per_serving.carbs_g | round | int }} g carbs ·
+      {{ r.per_serving.fat_g | round | int }} g fat
+      <span class="muted">/ serving ({{ r.servings }} servings cooked)</span>
+    </p>
+    <details>
+      <summary>Ingredients &amp; steps</summary>
+      <ul class="ingredients">
+        {% for ing in r.ingredients %}<li>{{ ing.grams | round | int }} g {{ ing.name }}</li>{% endfor %}
+      </ul>
+      <ol class="steps">
+        {% for step in r.steps %}<li>{{ step }}</li>{% endfor %}
+      </ol>
+    </details>
+    <div class="card-actions">
+      <form method="post" action="/plan/{{ loop.index0 }}/rate" class="rate">
+        <button name="score" value="1" class="ghost" title="Like — more like this">👍</button>
+        <button name="score" value="-1" class="ghost" title="Dislike — avoid this">👎</button>
+      </form>
+      <form method="post" action="/plan/{{ loop.index0 }}/decline" onsubmit="showBusy()">
+        <button type="submit" class="secondary">Decline &amp; replace</button>
+      </form>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+
+<h2>Weekday schedule</h2>
+<table class="schedule">
+  <thead><tr><th>Day</th><th>Dinner</th></tr></thead>
+  <tbody>
+    {% for m in meals %}
+    <tr><td>{{ m.day }}</td><td>{{ m.title }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p><a class="link" href="/shopping">🛒 View shopping list</a></p>
+
+{% endif %}
+{% endif %}
+{% endblock %}

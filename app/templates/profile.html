@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Preferences</h2>
+<form method="post" action="/profile" class="stack">
+  <label>Max calories per serving
+    <input type="number" name="max_kcal"
+           value="{{ prefs.max_kcal if prefs.max_kcal is not none else '' }}" placeholder="e.g. 600">
+  </label>
+  <label>Min protein per serving (g)
+    <input type="number" name="min_protein_g"
+           value="{{ prefs.min_protein_g if prefs.min_protein_g is not none else '' }}" placeholder="e.g. 40">
+  </label>
+  <label>Dietary notes
+    <input type="text" name="restrictions" value="{{ prefs.restrictions }}"
+           placeholder="PCOS, high-protein">
+  </label>
+  <label>Servings
+    <input type="number" name="servings" value="{{ prefs.servings }}" min="1">
+  </label>
+
+  <fieldset>
+    <legend>Stores you shop at</legend>
+    <div class="chip-grid">
+      {% for slug, name in chains %}
+      <label class="chip">
+        <input type="checkbox" name="stores" value="{{ slug }}"
+               {% if slug in prefs.stores %}checked{% endif %}>
+        {{ name }}
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Foods to avoid</legend>
+    <div class="chip-grid">
+      {% for cid, display, _kw in ban_categories %}
+      <label class="chip">
+        <input type="checkbox" name="bans" value="{{ cid }}"
+               {% if cid in prefs.bans %}checked{% endif %}>
+        {{ display }}
+      </label>
+      {% endfor %}
+      {% for item in custom_bans %}
+      <label class="chip">
+        <input type="checkbox" name="bans" value="{{ item }}" checked>
+        {{ item }}
+      </label>
+      {% endfor %}
+    </div>
+    <label>Ban specific foods (comma-separated)
+      <input type="text" name="bans_custom" placeholder="e.g. mushrooms, salmon">
+    </label>
+    <p class="muted">Uncheck any to allow it again. Best-effort matching — not a guarantee for
+    severe allergies.</p>
+  </fieldset>
+
+  <button type="submit">Save</button>
+</form>
+{% endblock %}
