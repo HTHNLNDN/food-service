@@ -88,6 +88,15 @@ CREATE TABLE IF NOT EXISTS eval_scores (
     value    REAL
 );
 
+-- Static UI-chrome strings (nav, headings, buttons — see app/i18n.py), translated once per
+-- configured display language and cached so page renders never re-call the LLM.
+CREATE TABLE IF NOT EXISTS ui_translations (
+    language TEXT NOT NULL,
+    text     TEXT NOT NULL,  -- the literal English string as written in the templates
+    value    TEXT NOT NULL,
+    PRIMARY KEY (language, text)
+);
+
 -- Editable price list; cost is computed as a view over this so a price change re-costs history.
 CREATE TABLE IF NOT EXISTS model_prices (
     model           TEXT PRIMARY KEY,
@@ -188,6 +197,11 @@ _MIGRATIONS = [
     ("preferences", "bans", "TEXT NOT NULL DEFAULT '[]'"),
     ("recipes", "per_serving_fibre_g", "REAL"),
     ("plans", "use_up", "TEXT NOT NULL DEFAULT ''"),
+    # Display-only translation (app/translate.py): empty language = English, unchanged behaviour.
+    ("preferences", "language", "TEXT NOT NULL DEFAULT ''"),
+    ("recipes", "title_translated", "TEXT"),
+    ("recipes", "steps_translated", "TEXT"),  # JSON list, same length/order as `steps`
+    ("recipe_ingredients", "name_translated", "TEXT"),
 ]
 
 

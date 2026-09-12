@@ -14,6 +14,10 @@ class Config:
     llm_base_url: str
     llm_model: str
     llm_api_key: str | None
+    # Optional cheaper/different model for display translation; empty = reuse the LLM_* above.
+    translate_base_url: str
+    translate_model: str
+    translate_api_key: str | None
 
 
 def load_config() -> Config:
@@ -27,4 +31,7 @@ def load_config() -> Config:
         llm_base_url=os.environ.get("LLM_BASE_URL", ""),
         llm_model=os.environ.get("LLM_MODEL", ""),
         llm_api_key=os.environ.get("LLM_API_KEY"),
+        translate_base_url=os.environ.get("TRANSLATE_BASE_URL", ""),
+        translate_model=os.environ.get("TRANSLATE_MODEL", ""),
+        translate_api_key=os.environ.get("TRANSLATE_API_KEY"),
     )

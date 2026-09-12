@@ -146,6 +146,38 @@ def test_have_empty_is_a_noop():
 # --- amount formatting ---
 
 
+# --- display translation (English `ingredient` stays the key; `label` shows the translation) ---
+
+
+def test_matched_item_shows_translated_label_but_keeps_english_ingredient_key():
+    recipe = PlannedRecipe(
+        title="r", servings=4, ingredients=[Ingredient("chicken breast", 400)], steps=[],
+        per_serving=ZERO, flagged=False, ingredient_translations={"chicken breast": "kyllingebryst"},
+    )
+    matcher = FakeMatcher({"chicken breast": 0})
+    sl = build_shopping_list([recipe], [_offer("rema", "Kyllingebryst", 20)], ["rema"], matcher=matcher)
+    assert sl.items[0].ingredient == "chicken breast"   # unchanged lookup/checklist key
+    assert sl.items[0].label == "kyllingebryst"          # what's printed
+
+
+def test_unmatched_and_already_have_items_also_get_translated_labels():
+    recipe = PlannedRecipe(
+        title="r", servings=4, ingredients=[Ingredient("quinoa", 250)], steps=[],
+        per_serving=ZERO, flagged=False, ingredient_translations={"quinoa": "quinoafrø"},
+    )
+    matcher = FakeMatcher({"quinoa": None})
+    sl = build_shopping_list([recipe], [], ["rema"], matcher=matcher)
+    assert sl.unmatched[0].label == "quinoafrø"
+
+    sl2 = build_shopping_list([recipe], [], ["rema"], have="quinoa")
+    assert sl2.already_have[0].label == "quinoafrø"
+
+
+def test_label_falls_back_to_english_when_no_translation():
+    sl = build_shopping_list([_recipe("broccoli")], [], ["rema"])
+    assert sl.unmatched[0].label == "broccoli"
+
+
 def test_human_amount_formats_grams_and_kilos():
     assert _human_amount(300) == "300 g"
     assert _human_amount(999) == "999 g"

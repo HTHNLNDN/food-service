@@ -62,10 +62,11 @@ def _install_fakes(client, recipes, replacement, offers, matches=None):
     client.app.state.plan_sync = True  # run planning inline so tests are deterministic
 
 
-def _set_profile(client):
-    client.post("/profile", data={"max_kcal": "600", "min_protein_g": "5",
-                                  "servings": "2", "stores": ["rema"]},
-                follow_redirects=False)
+def _set_profile(client, language=""):
+    data = {"max_kcal": "600", "min_protein_g": "5", "servings": "2", "stores": ["rema"]}
+    if language:
+        data["language"] = language
+    client.post("/profile", data=data, follow_redirects=False)
 
 
 def test_home_shows_plan_button():
@@ -199,3 +200,110 @@ def test_decline_swaps_the_dish():
         home = client.get("/")
     assert "Backup dinner" in home.text
     assert "Trout plate" in home.text
+
+
+def test_declining_one_dish_only_greys_out_that_card():
+    """A single-dish decline must not take over the whole page as if replanning the week."""
+    import threading
+    import time
+
+    class SlowReplaceAgent:
+        """Blocks in replace() until told to proceed, so the test can observe the in-flight state."""
+
+        def __init__(self, recipes, replacement, ready):
+            self._recipes = recipes
+            self._replacement = replacement
+            self._ready = ready
+
+        def plan_week(self, ctx):
+            return list(self._recipes)
+
+        def replace(self, declined, ctx):
+            self._ready.wait(timeout=5)
+            return self._replacement
+
+    ready = threading.Event()
+    with TestClient(app) as client:
+        _install_fakes(client, [_recipe("Chicken bowl", "chicken breast"),
+                                _recipe("Trout plate", "trout fillet")],
+                       _recipe("Backup dinner", "eggs"),
+                       [FakeOffer("rema", "Kylling", 20)])
+        _set_profile(client)
+        client.post("/plan", follow_redirects=False)  # fast, synchronous initial plan
+
+        def build(config, conn):
+            slow = SlowReplaceAgent(
+                [_recipe("Chicken bowl", "chicken breast"), _recipe("Trout plate", "trout fillet")],
+                _recipe("Backup dinner", "eggs"), ready,
+            )
+            return Services(slow, FakeOffers([FakeOffer("rema", "Kylling", 20)]),
+                            FakeNutrition(), FakeMatcher())
+
+        client.app.state.build_services = build
+        client.app.state.plan_sync = False  # exercise the real background thread
+
+        posted = client.post("/plan/0/decline", follow_redirects=False)
+        assert posted.status_code in (302, 303)
+
+        # The background job is guaranteed still blocked in replace() here (ready isn't set yet).
+        mid = client.get("/").text
+        assert 'class="planning"' not in mid     # no whole-page takeover for a single dish
+        assert "This week&#39;s dinners" in mid   # heading renders (t() escapes the apostrophe)
+        assert "Trout plate" in mid              # the other dish renders normally
+        assert 'class="card declining"' in mid   # the declined card is marked for greying out
+        assert "Chicken bowl" in mid             # its old content stays visible while it waits
+
+        ready.set()  # let the replacement complete
+        home = ""
+        for _ in range(50):
+            home = client.get("/").text
+            if "Backup dinner" in home:
+                break
+            time.sleep(0.1)
+    assert "Backup dinner" in home
+    assert "declining" not in home
+
+
+def test_translated_content_renders_end_to_end():
+    from app.translate import Translated
+
+    class FakeTranslator:
+        def translate(self, title, steps, ingredient_names, language):
+            return Translated("Kyllingeskål", ["Steg det."], ["kyllingebryst"])
+
+        def translate_batch(self, texts, language):
+            return [f"[{t}]" for t in texts]  # stand-in "translation": marks each string
+
+    with TestClient(app) as client:
+        def build(config, conn):
+            return Services(FakeAgent([_recipe("Chicken bowl", "chicken breast")], _recipe("B", "eggs")),
+                            FakeOffers([FakeOffer("rema", "Kylling", 20)]), FakeNutrition(),
+                            FakeMatcher(), FakeTranslator())
+
+        client.app.state.build_services = build
+        client.app.state.plan_sync = True
+        _set_profile(client, language="Danish")  # profile_save warms the ui_translations cache
+        client.post("/plan", follow_redirects=False)
+
+        home = client.get("/").text
+        assert "Kyllingeskål" in home and "Chicken bowl" not in home
+        assert "Steg det." in home
+        assert "kyllingebryst" in home
+        assert "[This week&#39;s dinners]" in home  # static chrome translated too, not just recipes
+        assert "[Shopping]" in home                # nav link
+
+        shop = client.get("/shopping").text
+        assert "kyllingebryst" in shop           # translated label shown
+        assert 'value="chicken breast"' in shop  # English stays the checklist/lookup key
+        assert "[Shopping list]" in shop
+
+        printed = client.get("/print").text
+        assert "Kyllingeskål" in printed and "Steg det." in printed
+
+
+def test_static_chrome_stays_english_without_a_language_configured():
+    with TestClient(app) as client:
+        home = client.get("/").text
+    assert "This week's dinners" not in home  # no plan yet, but nav/title chrome renders
+    assert "Plan this week" in home
+    assert "Shopping" in home and "[Shopping]" not in home

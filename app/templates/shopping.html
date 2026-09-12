@@ -1,26 +1,26 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-head">
-  <h2>Shopping list</h2>
-  <a class="link" href="/">← This week</a>
+  <h2>{{ t("Shopping list") }}</h2>
+  <a class="link" href="/">← {{ t("This week") }}</a>
 </div>
 
 {% if not plan %}
-<p class="lead">No plan yet. <a href="/">Plan your week</a> first — your shopping list will appear here.</p>
+<p class="lead">{{ t("No plan yet.") }} <a href="/">{{ t("Plan your week") }}</a> {{ t("first — your shopping list will appear here.") }}</p>
 {% elif not shopping %}
-<p class="lead">Choose the stores you shop at in <a href="/profile">Preferences</a> to build a shopping list.</p>
+<p class="lead">{{ t("Choose the stores you shop at in") }} <a href="/profile">{{ t("Preferences") }}</a> {{ t("to build a shopping list.") }}</p>
 {% else %}
 
 {% if shopping.items %}
 <section class="shop-section">
-  <h3>On offer <span class="muted">— {{ shopping.total }} DKK</span></h3>
+  <h3>{{ t("On offer") }} <span class="muted">— {{ shopping.total }} DKK</span></h3>
   {% for store, items in shopping.by_store().items() %}
   <p class="store">{{ store }}</p>
   <ul class="checklist">
     {% for i in items %}
     <li><label>
       <input type="checkbox" class="tick" value="{{ i.ingredient }}">
-      <span class="amt">{{ i.amount }}</span> <span class="name">{{ i.ingredient }}</span>
+      <span class="amt">{{ i.amount }}</span> <span class="name">{{ i.label }}</span>
       <span class="muted offer">{{ i.offer_name }}</span> <b class="price">{{ i.price }} DKK</b>
     </label></li>
     {% endfor %}
@@ -31,12 +31,12 @@
 
 {% if shopping.unmatched %}
 <section class="shop-section">
-  <h3>Not on offer</h3>
+  <h3>{{ t("Not on offer") }}</h3>
   <ul class="checklist">
     {% for u in shopping.unmatched %}
     <li><label>
       <input type="checkbox" class="tick" value="{{ u.ingredient }}">
-      <span class="amt">{{ u.amount }}</span> <span class="name">{{ u.ingredient }}</span>
+      <span class="amt">{{ u.amount }}</span> <span class="name">{{ u.label }}</span>
     </label></li>
     {% endfor %}
   </ul>
@@ -44,14 +44,14 @@
 {% endif %}
 
 {% if not shopping.items and not shopping.unmatched %}
-<p class="lead">Nothing to buy — everything's covered.</p>
+<p class="lead">{{ t("Nothing to buy — everything's covered.") }}</p>
 {% endif %}
 
 {% if shopping.already_have %}
 <section class="shop-section already">
-  <h3 class="muted">Already have <span class="muted">— using up, don't buy</span></h3>
+  <h3 class="muted">{{ t("Already have") }} <span class="muted">{{ t("— using up, don't buy") }}</span></h3>
   <ul class="plain-list muted">
-    {% for u in shopping.already_have %}<li>{{ u.amount }} {{ u.ingredient }}</li>{% endfor %}
+    {% for u in shopping.already_have %}<li>{{ u.amount }} {{ u.label }}</li>{% endfor %}
   </ul>
 </section>
 {% endif %}

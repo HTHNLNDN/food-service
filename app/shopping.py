@@ -33,25 +33,35 @@ def _human_amount(grams: float) -> str:
 
 @dataclass(frozen=True)
 class ShoppingItem:
-    ingredient: str
+    ingredient: str        # English — canonical identity (checklist key, offer matching)
     grams: float
     offer_name: str
     price: Decimal
     chain_slug: str
+    display_name: str = ""  # translated label to print; falls back to `ingredient` when unset
 
     @property
     def amount(self) -> str:
         return _human_amount(self.grams)
+
+    @property
+    def label(self) -> str:
+        return self.display_name or self.ingredient
 
 
 @dataclass(frozen=True)
 class UnmatchedItem:
     ingredient: str
     grams: float
+    display_name: str = ""
 
     @property
     def amount(self) -> str:
         return _human_amount(self.grams)
+
+    @property
+    def label(self) -> str:
+        return self.display_name or self.ingredient
 
 
 @dataclass(frozen=True)
@@ -85,6 +95,16 @@ def _aggregate(recipes: list[PlannedRecipe]) -> dict[str, float]:
         for ing in recipe.ingredients:
             totals[ing.name] = totals.get(ing.name, 0.0) + ing.grams
     return totals
+
+
+def _ingredient_translations(recipes: list[PlannedRecipe]) -> dict[str, str]:
+    """Merge each recipe's English-name -> translated-name map into one week-level lookup, so
+    the same ingredient shows the same translated label everywhere on the shopping list."""
+    merged: dict[str, str] = {}
+    for recipe in recipes:
+        if recipe.ingredient_translations:
+            merged.update(recipe.ingredient_translations)
+    return merged
 
 
 # --- "already have" (use-up) matching: best-effort word overlap, like the app's other matchers ---
@@ -152,10 +172,12 @@ def build_shopping_list(
 ) -> ShoppingList:
     allowed = set(selected)
     in_scope = _cap_offers([o for o in offers if o.chain_slug in allowed])  # store whitelist + cap
+    translations = _ingredient_translations(recipes)
 
     have_sets = _have_word_sets(have)
     aggregated = _aggregate(recipes)
-    already_have = [UnmatchedItem(n, g) for n, g in aggregated.items() if _is_have(n, have_sets)]
+    already_have = [UnmatchedItem(n, g, translations.get(n, ""))
+                    for n, g in aggregated.items() if _is_have(n, have_sets)]
     amounts = {n: g for n, g in aggregated.items() if not _is_have(n, have_sets)}  # things to buy
 
     resolved: dict[str, Match | None] = {}
@@ -184,9 +206,9 @@ def build_shopping_list(
     for name, grams in amounts.items():
         match = resolved.get(name)
         if match is not None and match[2] in allowed:  # re-check store: selection may have changed
-            items.append(ShoppingItem(name, grams, match[0], match[1], match[2]))
+            items.append(ShoppingItem(name, grams, match[0], match[1], match[2], translations.get(name, "")))
         else:
-            unmatched.append(UnmatchedItem(name, grams))
+            unmatched.append(UnmatchedItem(name, grams, translations.get(name, "")))
 
     total = sum((i.price for i in items), Decimal(0))
     return ShoppingList(items=items, unmatched=unmatched, total=total, already_have=already_have)

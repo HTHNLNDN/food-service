@@ -3,6 +3,7 @@ from app.db import bootstrap, connect
 from app.nutrition import Ingredient, Macros
 from app.planner import decline, generate_plan, load_latest_plan, weekday_meals
 from app.profile import Preferences, save_preferences, save_rating
+from app.translate import Translated
 
 # --- fakes ---
 
@@ -56,11 +57,25 @@ def _recipe(title, grams=400, servings=4):
     )
 
 
-def _conn(tmp_path, *, servings=2, max_kcal=600, min_protein=15, stores=("rema",), bans=()):
+def _conn(tmp_path, *, servings=2, max_kcal=600, min_protein=15, stores=("rema",), bans=(), language=""):
     conn = connect(tmp_path / "p.db")
     bootstrap(conn)
-    save_preferences(conn, Preferences(max_kcal, min_protein, "PCOS", servings, list(stores), list(bans)))
+    save_preferences(conn, Preferences(max_kcal, min_protein, "PCOS", servings, list(stores),
+                                       list(bans), language))
     return conn
+
+
+class FakeTranslator:
+    def __init__(self, result=None, raises=None):
+        self.calls = []
+        self._result = result
+        self._raises = raises
+
+    def translate(self, title, steps, ingredient_names, language):
+        self.calls.append((title, steps, ingredient_names, language))
+        if self._raises:
+            raise self._raises
+        return self._result
 
 
 def _recipe_with(title, ingredient):
@@ -281,3 +296,75 @@ class _SwitchingNutrition:
     def lookup(self, name):
         self._calls += 1
         return (1, self._first if self._calls == 1 else self._then)
+
+
+# --- display translation (English stays the lookup key; translation is display-only) ---
+
+
+def test_translation_is_applied_and_persisted_when_language_is_set(tmp_path):
+    conn = _conn(tmp_path, language="Danish")
+    agent = FakeAgent([_recipe_with("Chicken Bowl", "chicken breast")], replacement=_recipe("R"))
+    translated = Translated("Kyllingeskål", ["steg det"], ["kyllingebryst"])
+    translator = FakeTranslator(result=translated)
+    plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
+                         translator=translator, num_dinners=1)
+    r = plan.recipes[0]
+    assert r.title == "Chicken Bowl"                 # English stays the canonical title
+    assert r.title_translated == "Kyllingeskål"
+    assert r.steps_translated == ["steg det"]
+    assert r.ingredient_translations == {"chicken breast": "kyllingebryst"}
+    assert translator.calls[0][3] == "Danish"        # language passed through
+
+    reloaded = load_latest_plan(conn).recipes[0]      # survives persist/reload
+    assert reloaded.title_translated == "Kyllingeskål"
+    assert reloaded.ingredient_translations == {"chicken breast": "kyllingebryst"}
+
+
+def test_no_translation_call_when_language_is_blank(tmp_path):
+    conn = _conn(tmp_path, language="")  # default
+    agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
+    translator = FakeTranslator(result=Translated("X", ["y"], ["z"]))
+    plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
+                         translator=translator, num_dinners=1)
+    assert translator.calls == []                    # never called — no wasted spend when off
+    assert plan.recipes[0].title_translated is None
+
+
+def test_no_translation_when_translator_not_configured(tmp_path):
+    conn = _conn(tmp_path, language="Danish")
+    agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
+    plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
+                         num_dinners=1)  # translator defaults to None
+    assert plan.recipes[0].title_translated is None
+
+
+def test_translation_failure_falls_back_to_english_without_breaking_the_plan(tmp_path):
+    conn = _conn(tmp_path, language="Danish")
+    agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
+    translator = FakeTranslator(result=None)          # simulates malformed/mismatched LLM output
+    plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
+                         translator=translator, num_dinners=1)
+    assert plan.recipes[0].title == "A"
+    assert plan.recipes[0].title_translated is None
+
+
+def test_translator_exception_falls_back_to_english_without_breaking_the_plan(tmp_path):
+    conn = _conn(tmp_path, language="Danish")
+    agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
+    translator = FakeTranslator(raises=RuntimeError("network blip"))
+    plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
+                         translator=translator, num_dinners=1)
+    assert plan.recipes[0].title == "A"
+    assert plan.recipes[0].title_translated is None
+
+
+def test_decline_translates_the_replacement(tmp_path):
+    conn = _conn(tmp_path, language="Danish")
+    agent = FakeAgent([_recipe("A"), _recipe("B")], replacement=_recipe_with("Fish Dish", "cod"))
+    plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
+                         num_dinners=2)  # initial plan generated without translation configured yet
+    translator = FakeTranslator(result=Translated("Fiskeret", ["steg torsken"], ["torsk"]))
+    updated = decline(conn, plan.id, 0, agent=agent, offers=FakeOffers([]),
+                      nutrition=FakeNutrition(WITHIN), translator=translator)
+    assert updated.recipes[0].title_translated == "Fiskeret"
+    assert updated.recipes[1].title_translated is None  # untouched sibling stays as it was

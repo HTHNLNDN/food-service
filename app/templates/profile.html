@@ -1,5 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
+{% if saved %}
+<div id="toast" class="toast">
+  Saved.{% if prefs.language %} Language change takes effect next time you plan the week or
+  replace a dish — it won't rewrite what's already planned.{% endif %}
+</div>
+<script>
+(function () {
+  var t = document.getElementById("toast");
+  requestAnimationFrame(function () { t.classList.add("show"); });
+  setTimeout(function () { t.classList.remove("show"); }, 4000);
+})();
+</script>
+{% endif %}
 <h2>Preferences</h2>
 <form method="post" action="/profile" class="stack">
   <label>Max calories per serving
@@ -16,6 +29,10 @@
   </label>
   <label>Servings
     <input type="number" name="servings" value="{{ prefs.servings }}" min="1">
+  </label>
+  <label>Display language <span class="muted">(optional)</span>
+    <input type="text" name="language" value="{{ prefs.language }}"
+           placeholder="e.g. Danish — leave blank for English">
   </label>
 
   <fieldset>

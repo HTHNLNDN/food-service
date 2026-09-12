@@ -60,6 +60,13 @@ def test_selected_store_slugs_is_the_whitelist(tmp_path):
     assert selected_store_slugs(conn) == ["rema"]
 
 
+def test_language_defaults_empty_and_roundtrips(tmp_path):
+    conn = _conn(tmp_path)
+    assert load_preferences(conn).language == ""  # empty = English, no translation
+    save_preferences(conn, Preferences(None, None, "", 2, ["rema"], language="Danish"))
+    assert load_preferences(conn).language == "Danish"
+
+
 def test_chains_cover_expected_dk_slugs():
     slugs = {slug for slug, _ in CHAINS}
     assert {"rema", "netto", "foetex", "lidl", "fakta-tyskland"} <= slugs
@@ -91,6 +98,29 @@ def test_post_profile_persists_and_export_returns_json():
     assert body["min_protein_g"] == 40
     assert body["restrictions"] == "PCOS"
     assert sorted(body["stores"]) == ["netto", "rema"]
+
+
+def test_post_profile_redirects_with_saved_flag():
+    with TestClient(app) as client:
+        resp = client.post("/profile", data={"servings": "2"}, follow_redirects=False)
+    assert resp.headers["location"] == "/profile?saved=1"
+
+
+def test_save_toast_mentions_translation_timing_only_when_language_set():
+    with TestClient(app) as client:
+        client.post("/profile", data={"servings": "2", "language": "Danish"}, follow_redirects=False)
+        with_lang = client.get("/profile?saved=1").text
+        client.post("/profile", data={"servings": "2", "language": ""}, follow_redirects=False)
+        without_lang = client.get("/profile?saved=1").text
+    assert "takes effect next time you plan" in with_lang
+    assert "takes effect next time you plan" not in without_lang
+    assert 'id="toast"' in with_lang and 'id="toast"' in without_lang  # save confirmation either way
+
+
+def test_no_toast_without_saved_flag():
+    with TestClient(app) as client:
+        html = client.get("/profile").text
+    assert 'id="toast"' not in html
 
 
 def test_post_profile_ignores_unknown_store_slug():

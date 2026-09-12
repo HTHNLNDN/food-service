@@ -17,9 +17,13 @@ router = APIRouter()
 # Planning is slow (~1-2 min of grounded LLM + macro checks), which exceeds a phone browser's
 # request timeout. So POST /plan starts the work in the background and returns immediately; the
 # page shows "Planning…" and auto-refreshes until it's ready. Single household -> one job, tracked
-# in module state. Tests set app.state.plan_sync to run inline for determinism.
+# in module state. `declining_slot`/`declining_title` distinguish a single-dish decline from a
+# full replan, so only that dish's card greys out instead of the whole page taking over (a decline
+# is still one job at a time, same as a full plan). Tests set app.state.plan_sync to run inline.
 _plan_lock = threading.Lock()
-_plan_state: dict[str, object] = {"running": False, "error": None}
+_plan_state: dict[str, object] = {
+    "running": False, "error": None, "declining_slot": None, "declining_title": None,
+}
 
 
 def _friendly(exc: Exception) -> str:
@@ -39,15 +43,20 @@ def _run_job(config, build, work) -> None:
     with _plan_lock:
         _plan_state["error"] = error
         _plan_state["running"] = False
+        _plan_state["declining_slot"] = None
+        _plan_state["declining_title"] = None
 
 
-def _start_job(request: Request, work) -> None:
+def _start_job(request: Request, work, *, declining_slot: int | None = None,
+               declining_title: str | None = None) -> None:
     """Run `work(conn, services)` in the background (or inline when app.state.plan_sync)."""
     with _plan_lock:
         if _plan_state["running"]:
             return  # a job is already in flight — ignore the duplicate submit
         _plan_state["running"] = True
         _plan_state["error"] = None
+        _plan_state["declining_slot"] = declining_slot
+        _plan_state["declining_title"] = declining_title
     config = request.app.state.config
     build = request.app.state.build_services
     if getattr(request.app.state, "plan_sync", False):
@@ -71,12 +80,27 @@ def _shopping_for(request: Request, conn: sqlite3.Connection, plan):
         return None
 
 
+def _still_declining(plan, slot: int | None, title: str | None) -> int | None:
+    """The slot to render as busy, or None once the DB already shows its replacement.
+
+    `_plan_state` is cleared by the background job only *after* it commits the new dish, so a
+    request can land in the gap between that commit and the flag reset. Comparing against the
+    dish still in the DB (rather than trusting the flag alone) closes that race: the moment the
+    new title lands, the card stops looking busy even if the flag hasn't caught up yet."""
+    if slot is None or plan is None or not (0 <= slot < len(plan.recipes)):
+        return None
+    return slot if plan.recipes[slot].title == title else None
+
+
 def _render_home(request: Request, conn: sqlite3.Connection):
     with _plan_lock:
-        planning = _plan_state["running"]
+        running = _plan_state["running"]
         error = _plan_state["error"]
+        declining_slot = _plan_state["declining_slot"]
+        declining_title = _plan_state["declining_title"]
     config = request.app.state.config
     plan = load_latest_plan(conn)
+    busy_slot = _still_declining(plan, declining_slot, declining_title)
     return request.app.state.templates.TemplateResponse(
         request,
         "plan.html",
@@ -85,7 +109,9 @@ def _render_home(request: Request, conn: sqlite3.Connection):
             "plan": plan,
             "meals": weekday_meals(plan.recipes) if plan else [],
             "llm_ready": bool(config.llm_base_url and config.llm_model),
-            "planning": planning,
+            # a single-dish decline greys out its own card instead of taking over the page
+            "planning": running and declining_slot is None,
+            "declining_slot": busy_slot,
             "error": error,
         },
     )
@@ -171,7 +197,8 @@ def shopping(request: Request, conn: Conn):
 def make_plan(request: Request, use_up: Annotated[str, Form()] = ""):
     text = use_up.strip()
     _start_job(request, lambda conn, svc: generate_plan(
-        conn, agent=svc.agent, offers=svc.offers, nutrition=svc.nutrition, use_up=text))
+        conn, agent=svc.agent, offers=svc.offers, nutrition=svc.nutrition,
+        translator=svc.translator, use_up=text))
     return RedirectResponse("/", status_code=303)
 
 
@@ -181,7 +208,9 @@ def decline_dish(request: Request, conn: Conn, slot: int):
     if plan is not None and 0 <= slot < len(plan.recipes):
         pid = plan.id
         _start_job(request, lambda c, svc: decline(
-            c, pid, slot, agent=svc.agent, offers=svc.offers, nutrition=svc.nutrition))
+            c, pid, slot, agent=svc.agent, offers=svc.offers, nutrition=svc.nutrition,
+            translator=svc.translator),
+            declining_slot=slot, declining_title=plan.recipes[slot].title)
     return RedirectResponse("/", status_code=303)
 
 

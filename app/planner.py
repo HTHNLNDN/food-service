@@ -7,7 +7,7 @@ The agent is untrusted for numbers — every recipe's per-serving macros are rec
 
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from app import telemetry
@@ -18,6 +18,7 @@ from app.history import AVOID_PROMPT_CAP, PastDish, is_repeat, recent_avoided
 from app.nutrition import Ingredient, Macros, NutritionSource, macros_for
 from app.offers import OffersProvider
 from app.profile import load_preferences, preference_summary, selected_store_slugs
+from app.translate import Translator
 
 MAX_REVISIONS = 2       # bounded revise loop per dish
 OFFER_PROMPT_CAP = 40   # how many offer names to hand the agent
@@ -39,6 +40,11 @@ class PlannedRecipe:
     steps: list[str]
     per_serving: Macros
     flagged: bool  # macros couldn't be verified within targets (or ingredients unresolved)
+    # Display-only translation (app/translate.py). English above stays the USDA/offer lookup key;
+    # these are populated once at persist time when a display language is configured, else None.
+    title_translated: str | None = None
+    steps_translated: list[str] | None = None
+    ingredient_translations: dict[str, str] | None = None  # English name -> translated name
 
 
 @dataclass(frozen=True)
@@ -121,6 +127,24 @@ def _verify_or_revise(
                          current.steps, per, flagged=True)
 
 
+def _translate(planned: PlannedRecipe, language: str, translator: Translator) -> PlannedRecipe:
+    """Translate a finalized recipe for display. Never blocks the plan: any failure (bad
+    output, network error, whatever) just keeps the recipe in English."""
+    names = [i.name for i in planned.ingredients]
+    try:
+        result = translator.translate(planned.title, planned.steps, names, language)
+    except Exception:  # noqa: BLE001 - a translation hiccup must not break the plan
+        return planned
+    if result is None:
+        return planned
+    return replace(
+        planned,
+        title_translated=result.title,
+        steps_translated=result.steps,
+        ingredient_translations=dict(zip(names, result.ingredient_names)),
+    )
+
+
 def _plan_context(
     conn: sqlite3.Connection, offers: OffersProvider, num_dinners: int,
     past: list[PastDish] = (), use_up: str = "",
@@ -148,6 +172,7 @@ def generate_plan(
     agent: MealPlanAgent,
     offers: OffersProvider,
     nutrition: NutritionSource,
+    translator: Translator | None = None,
     num_dinners: int = 5,
     use_up: str = "",
 ) -> Plan:
@@ -158,6 +183,9 @@ def generate_plan(
         if hasattr(nutrition, "warm"):  # resolve all ingredients' macros in one parallel pass
             nutrition.warm([i.name for r in recipes for i in r.ingredients])
         verified = [_verify_or_revise(r, ctx, agent, nutrition, past, conn) for r in recipes]
+        language = load_preferences(conn).language
+        if translator is not None and language:
+            verified = [_translate(r, language, translator) for r in verified]
         plan_id = _persist(conn, verified, use_up)
         telemetry.link_plan(conn, trace_id, plan_id)
     return Plan(id=plan_id, recipes=verified, use_up=use_up)
@@ -171,6 +199,7 @@ def decline(
     agent: MealPlanAgent,
     offers: OffersProvider,
     nutrition: NutritionSource,
+    translator: Translator | None = None,
 ) -> Plan:
     """Replace one dish with a fresh, macro-verified alternative and re-persist the plan."""
     plan = load_plan(conn, plan_id)
@@ -182,6 +211,9 @@ def decline(
         ctx = _plan_context(conn, offers, num_dinners=len(plan.recipes), past=past, use_up=plan.use_up)
         declined = _to_recipe(plan.recipes[slot_index])
         replacement = _verify_or_revise(agent.replace(declined, ctx), ctx, agent, nutrition, past, conn)
+        language = load_preferences(conn).language
+        if translator is not None and language:
+            replacement = _translate(replacement, language, translator)
         telemetry.link_plan(conn, trace_id, plan_id)
     recipes = list(plan.recipes)
     recipes[slot_index] = replacement
@@ -213,17 +245,19 @@ def _insert_recipes(conn: sqlite3.Connection, plan_id: int, recipes: list[Planne
     for slot, r in enumerate(recipes):
         rc = conn.execute(
             """INSERT INTO recipes
-               (plan_id, slot_index, title, servings, steps, per_serving_kcal,
-                per_serving_protein_g, per_serving_carbs_g, per_serving_fat_g,
+               (plan_id, slot_index, title, title_translated, servings, steps, steps_translated,
+                per_serving_kcal, per_serving_protein_g, per_serving_carbs_g, per_serving_fat_g,
                 per_serving_fibre_g, flagged)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (plan_id, slot, r.title, r.servings, json.dumps(r.steps),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (plan_id, slot, r.title, r.title_translated, r.servings, json.dumps(r.steps),
+             json.dumps(r.steps_translated) if r.steps_translated is not None else None,
              r.per_serving.kcal, r.per_serving.protein_g, r.per_serving.carbs_g,
              r.per_serving.fat_g, r.per_serving.fibre_g, int(r.flagged)),
         )
+        translations = r.ingredient_translations or {}
         conn.executemany(
-            "INSERT INTO recipe_ingredients (recipe_id, name, grams) VALUES (?, ?, ?)",
-            [(rc.lastrowid, i.name, i.grams) for i in r.ingredients],
+            "INSERT INTO recipe_ingredients (recipe_id, name, name_translated, grams) VALUES (?, ?, ?, ?)",
+            [(rc.lastrowid, i.name, translations.get(i.name), i.grams) for i in r.ingredients],
         )
 
 
@@ -249,13 +283,15 @@ def load_plan(conn: sqlite3.Connection, plan_id: int) -> Plan:
     for r in conn.execute(
         "SELECT * FROM recipes WHERE plan_id = ? ORDER BY slot_index", (plan_id,)
     ):
-        ingredients = [
-            Ingredient(name=i["name"], grams=i["grams"])
-            for i in conn.execute(
-                "SELECT name, grams FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id",
-                (r["id"],),
-            )
-        ]
+        ingredients = []
+        translations = {}
+        for i in conn.execute(
+            "SELECT name, name_translated, grams FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id",
+            (r["id"],),
+        ):
+            ingredients.append(Ingredient(name=i["name"], grams=i["grams"]))
+            if i["name_translated"]:
+                translations[i["name"]] = i["name_translated"]
         recipes.append(
             PlannedRecipe(
                 title=r["title"],
@@ -268,6 +304,9 @@ def load_plan(conn: sqlite3.Connection, plan_id: int) -> Plan:
                     r["per_serving_fibre_g"],
                 ),
                 flagged=bool(r["flagged"]),
+                title_translated=r["title_translated"],
+                steps_translated=json.loads(r["steps_translated"]) if r["steps_translated"] else None,
+                ingredient_translations=translations or None,
             )
         )
     return Plan(id=plan_id, recipes=recipes, use_up=use_up)
@@ -275,4 +314,5 @@ def load_plan(conn: sqlite3.Connection, plan_id: int) -> Plan:
 
 def weekday_meals(recipes: list[PlannedRecipe]) -> list[Meal]:
     """Assign each dinner to a weekday (Mon–Fri). 5 dinners -> 5 weekday dinners."""
-    return [Meal(day=day, title=recipes[i].title) for i, day in enumerate(_WEEKDAYS[:len(recipes)])]
+    return [Meal(day=day, title=recipes[i].title_translated or recipes[i].title)
+            for i, day in enumerate(_WEEKDAYS[:len(recipes)])]

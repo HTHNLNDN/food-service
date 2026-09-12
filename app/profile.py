@@ -15,6 +15,7 @@ from fastapi.responses import (
     Response,
 )
 
+from app import i18n
 from app.bans import BAN_CATEGORIES, KNOWN_CATEGORY_IDS
 from app.db import Conn
 
@@ -55,6 +56,7 @@ class Preferences:
     servings: int
     stores: list[str]
     bans: list[str] = field(default_factory=list)  # banned category ids + custom items
+    language: str = ""  # display language for recipes/shopping; "" = English, no translation
 
 
 def selected_store_slugs(conn: sqlite3.Connection) -> list[str]:
@@ -64,31 +66,33 @@ def selected_store_slugs(conn: sqlite3.Connection) -> list[str]:
 
 def load_preferences(conn: sqlite3.Connection) -> Preferences:
     row = conn.execute(
-        "SELECT max_kcal, min_protein_g, restrictions, servings, bans FROM preferences WHERE id = 1"
+        "SELECT max_kcal, min_protein_g, restrictions, servings, bans, language "
+        "FROM preferences WHERE id = 1"
     ).fetchone()
     stores = selected_store_slugs(conn)
     if row is None:
-        return Preferences(None, None, "", 2, stores, [])
+        return Preferences(None, None, "", 2, stores, [], "")
     return Preferences(
         row["max_kcal"], row["min_protein_g"], row["restrictions"], row["servings"],
-        stores, json.loads(row["bans"]),
+        stores, json.loads(row["bans"]), row["language"],
     )
 
 
 def save_preferences(conn: sqlite3.Connection, prefs: Preferences) -> None:
     conn.execute(
         """
-        INSERT INTO preferences (id, max_kcal, min_protein_g, restrictions, servings, bans)
-        VALUES (1, ?, ?, ?, ?, ?)
+        INSERT INTO preferences (id, max_kcal, min_protein_g, restrictions, servings, bans, language)
+        VALUES (1, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             max_kcal = excluded.max_kcal,
             min_protein_g = excluded.min_protein_g,
             restrictions = excluded.restrictions,
             servings = excluded.servings,
-            bans = excluded.bans
+            bans = excluded.bans,
+            language = excluded.language
         """,
         (prefs.max_kcal, prefs.min_protein_g, prefs.restrictions, prefs.servings,
-         json.dumps(prefs.bans)),
+         json.dumps(prefs.bans), prefs.language),
     )
     conn.execute("DELETE FROM stores")
     conn.executemany(
@@ -156,16 +160,19 @@ def export_all(conn: sqlite3.Connection) -> dict:
             "SELECT * FROM recipes WHERE plan_id = ? ORDER BY slot_index", (p["id"],)
         ):
             ingredients = [
-                {"name": i["name"], "grams": i["grams"]}
+                {"name": i["name"], "grams": i["grams"], "name_translated": i["name_translated"]}
                 for i in conn.execute(
-                    "SELECT name, grams FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id",
+                    "SELECT name, grams, name_translated FROM recipe_ingredients "
+                    "WHERE recipe_id = ? ORDER BY id",
                     (r["id"],),
                 )
             ]
             recipes.append({
                 "title": r["title"],
+                "title_translated": r["title_translated"],
                 "servings": r["servings"],
                 "steps": json.loads(r["steps"]),
+                "steps_translated": json.loads(r["steps_translated"]) if r["steps_translated"] else None,
                 "per_serving": {
                     "kcal": r["per_serving_kcal"], "protein_g": r["per_serving_protein_g"],
                     "carbs_g": r["per_serving_carbs_g"], "fat_g": r["per_serving_fat_g"],
@@ -203,19 +210,20 @@ router = APIRouter()
 
 
 @router.get("/profile", response_class=HTMLResponse)
-def profile_form(request: Request, conn: Conn):
+def profile_form(request: Request, conn: Conn, saved: bool = False):
     prefs = load_preferences(conn)
     custom_bans = [b for b in prefs.bans if b not in KNOWN_CATEGORY_IDS]
     return request.app.state.templates.TemplateResponse(
         request,
         "profile.html",
         {"title": "Preferences", "prefs": prefs, "chains": CHAINS,
-         "ban_categories": BAN_CATEGORIES, "custom_bans": custom_bans},
+         "ban_categories": BAN_CATEGORIES, "custom_bans": custom_bans, "saved": saved},
     )
 
 
 @router.post("/profile")
 def profile_save(
+    request: Request,
     conn: Conn,
     max_kcal: Annotated[str, Form()] = "",
     min_protein_g: Annotated[str, Form()] = "",
@@ -224,11 +232,13 @@ def profile_save(
     stores: Annotated[list[str] | None, Form()] = None,
     bans: Annotated[list[str] | None, Form()] = None,
     bans_custom: Annotated[str, Form()] = "",
+    language: Annotated[str, Form()] = "",
 ):
     # kept chips (categories + existing customs) + newly typed customs; replaces the whole list
     kept = [b.strip().lower() for b in (bans or []) if b.strip()]
     added = [b.strip().lower() for b in bans_custom.split(",") if b.strip()]
     all_bans = list(dict.fromkeys([*kept, *added]))  # dedupe, preserve order
+    language = language.strip()
     save_preferences(
         conn,
         Preferences(
@@ -238,9 +248,15 @@ def profile_save(
             servings=servings,
             stores=stores or [],
             bans=all_bans,
+            language=language,
         ),
     )
-    return RedirectResponse("/profile", status_code=303)
+    if language:
+        # warm the static UI-chrome cache (app/i18n.py) so nav/headings show translated too,
+        # not just recipes — best-effort, never blocks the save (see i18n.warm docstring)
+        services = request.app.state.build_services(request.app.state.config, conn)
+        i18n.warm(conn, language, services.translator)
+    return RedirectResponse("/profile?saved=1", status_code=303)
 
 
 @router.get("/me/export")

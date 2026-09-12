@@ -13,6 +13,7 @@ from app.db import connect
 from app.nutrition import LLMCandidatePicker, LocalNutritionSource, NutritionSource
 from app.offers import OffersProvider, ShelfAtlasOffersProvider
 from app.shopping import LLMOfferMatcher, OfferMatcher
+from app.translate import LLMTranslator, Translator
 
 
 @dataclass
@@ -21,6 +22,7 @@ class Services:
     offers: OffersProvider
     nutrition: NutritionSource
     offer_matcher: OfferMatcher
+    translator: Translator | None = None
 
 
 def _build_agent(config: Config) -> MealPlanAgent:
@@ -30,6 +32,14 @@ def _build_agent(config: Config) -> MealPlanAgent:
         native = config.llm_base_url.rsplit("/openai", 1)[0]  # .../v1beta/openai -> .../v1beta
         return GeminiGroundedAgent(native, config.llm_model, key)
     return OpenAICompatibleAgent(config.llm_base_url, config.llm_model, key)
+
+
+def _build_translator(config: Config) -> Translator:
+    # TRANSLATE_* is optional — unset falls back to the main LLM_* endpoint/model.
+    base = config.translate_base_url or config.llm_base_url
+    model = config.translate_model or config.llm_model
+    key = config.translate_api_key or config.llm_api_key or ""
+    return LLMTranslator(base, model, key)
 
 
 def build_services(config: Config, conn: sqlite3.Connection) -> Services:
@@ -43,4 +53,5 @@ def build_services(config: Config, conn: sqlite3.Connection) -> Services:
         nutrition=LocalNutritionSource(connect(config.usda_db_path), conn, picker),
         # offer matcher picks which Danish offer fits an English ingredient (never a price)
         offer_matcher=LLMOfferMatcher(config.llm_base_url, config.llm_model, key),
+        translator=_build_translator(config),
     )

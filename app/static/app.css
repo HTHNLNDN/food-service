@@ -80,6 +80,15 @@ nav a:hover { color: var(--accent-strong); }
   background: rgba(251, 250, 247, 0.94); color: var(--text);
 }
 .busy.show { display: flex; }
+.toast {
+  position: fixed; top: 0; left: 50%; z-index: 30; max-width: min(90vw, 32rem);
+  transform: translate(-50%, -120%); transition: transform 0.3s ease;
+  background: var(--accent-strong); color: #fff; padding: 0.7rem 1.2rem;
+  border-radius: 0 0 var(--radius) var(--radius); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+  text-align: center;
+}
+.toast.show { transform: translate(-50%, 0); }
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
 .muted { color: var(--muted); font-weight: 400; }
 .link { font-size: 0.9rem; color: var(--accent-strong); }
 
@@ -89,6 +98,8 @@ nav a:hover { color: var(--accent-strong); }
   padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.6rem;
 }
 .card.flagged { border-color: #e8c9a0; background: #fffaf2; }
+.card.declining { opacity: 0.55; }
+.card.declining .card-busy { animation: pulse 1.5s ease-in-out infinite; }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
 .card h3 { margin: 0; font-size: 1.05rem; }
 .badge { font-size: 0.72rem; background: #f3d9b5; color: #8a5a1a; padding: 0.15rem 0.5rem; border-radius: 999px; white-space: nowrap; }
@@ -115,7 +126,7 @@ button.ghost:hover { border-color: var(--accent-strong); filter: none; }
 .planning { text-align: center; padding: 2.5rem 1rem; }
 .planning .spinner { font-size: 2.5rem; margin-top: 1rem; animation: pulse 1.5s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .planning .spinner { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .planning .spinner, .card.declining .card-busy { animation: none; } }
 .downloads { line-height: 2; }
 .print-recipe { max-width: 640px; }
 

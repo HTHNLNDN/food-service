@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title }}</title>
+  <title>{{ t(title) }}</title>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
   <header class="site-header">
     <h1>🥗 food-service</h1>
     <nav>
-      <a href="/">This week</a>
-      <a href="/shopping">Shopping</a>
-      <a href="/profile">Preferences</a>
-      <a href="/cost">Cost</a>
-      <a href="/me">My data</a>
+      <a href="/">{{ t("This week") }}</a>
+      <a href="/shopping">{{ t("Shopping") }}</a>
+      <a href="/profile">{{ t("Preferences") }}</a>
+      <a href="/cost">{{ t("Cost") }}</a>
+      <a href="/me">{{ t("My data") }}</a>
     </nav>
   </header>
   <main class="container">
