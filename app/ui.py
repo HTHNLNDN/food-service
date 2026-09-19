@@ -129,6 +129,13 @@ def print_recipes(request: Request, conn: Conn):
     )
 
 
+@router.get("/more", response_class=HTMLResponse)
+def more_menu(request: Request):
+    return request.app.state.templates.TemplateResponse(
+        request, "more.html", {"title": "More"}
+    )
+
+
 @router.get("/cost", response_class=HTMLResponse)
 def cost(request: Request, conn: Conn):
     by_type = conn.execute(

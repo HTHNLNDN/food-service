@@ -9,7 +9,7 @@ import sqlite3
 
 UI_STRINGS: list[str] = [
     # nav / page titles (base.html) — shared with each page's `title` context value
-    "This week", "Shopping", "Preferences", "Cost", "My data", "Recipes",
+    "This week", "Shopping", "Preferences", "Cost", "My data", "Recipes", "Week", "More",
     # plan.html
     "This week's dinners", "Planning your week…",
     "No plan yet. Pick your preferences, then plan the week.",
@@ -28,7 +28,7 @@ UI_STRINGS: list[str] = [
     "Not on offer", "Nothing to buy — everything's covered.", "Already have",
     "— using up, don't buy",
     # print.html
-    "No plan to print yet.", "Print these recipes", "Ingredients", "Steps",
+    "No plan to print yet.", "Print these recipes", "Ingredients", "Steps", "Save",
 ]
 
 

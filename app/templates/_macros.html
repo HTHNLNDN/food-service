@@ -1,0 +1,54 @@
+{% macro nav_tab(icon, label, href, active=False) %}
+<a class="tab{% if active %} active{% endif %}" href="{{ href }}">
+  <span class="tab-icon" aria-hidden="true">{{ icon }}</span>
+  <span class="tab-label">{{ label }}</span>
+</a>
+{% endmacro %}
+
+{% macro button(text, variant="primary", type="submit") %}
+<button type="{{ type }}"{% if variant != "primary" %} class="{{ variant }}"{% endif %}{% for k, v in kwargs.items() %} {{ k }}="{{ v }}"{% endfor %}>{{ text }}</button>
+{% endmacro %}
+
+{% macro badge(text, title=none) %}
+<span class="badge"{% if title %} title="{{ title }}"{% endif %}>{{ text }}</span>
+{% endmacro %}
+
+{% macro recipe_card(r, index, declining_slot) %}
+<article class="card{% if r.flagged %} flagged{% endif %}{% if index == declining_slot %} declining{% endif %}">
+  <div class="card-head">
+    <h3>{{ r.title_translated or r.title }}</h3>
+    {% if r.flagged %}{{ badge(t("off-target"), title=t("Macros could not be verified within targets")) }}{% endif %}
+  </div>
+  <p class="macros">
+    {{ r.per_serving.kcal | round | int }} kcal ·
+    {{ r.per_serving.protein_g | round | int }} g protein ·
+    {{ r.per_serving.fibre_g | round | int }} g fibre ·
+    {{ r.per_serving.carbs_g | round | int }} g carbs ·
+    {{ r.per_serving.fat_g | round | int }} g fat
+    <span class="muted">/ serving ({{ r.servings }} servings cooked)</span>
+  </p>
+  <details>
+    <summary>{{ t("Ingredients & steps") }}</summary>
+    <ul class="ingredients">
+      {% for ing in r.ingredients %}<li>{{ ing.grams | round | int }} g
+        {{ (r.ingredient_translations or {}).get(ing.name, ing.name) }}</li>{% endfor %}
+    </ul>
+    <ol class="steps">
+      {% for step in (r.steps_translated or r.steps) %}<li>{{ step }}</li>{% endfor %}
+    </ol>
+  </details>
+  <div class="card-actions">
+    {% if index == declining_slot %}
+    <span class="muted card-busy">⏳ {{ t("Finding a replacement…") }}</span>
+    {% else %}
+    <form method="post" action="/plan/{{ index }}/rate" class="rate">
+      {{ button("👍", variant="ghost", name="score", value="1", title=t("Like — more like this")) }}
+      {{ button("👎", variant="ghost", name="score", value="-1", title=t("Dislike — avoid this")) }}
+    </form>
+    <form method="post" action="/plan/{{ index }}/decline">
+      {{ button(t("Decline & replace"), variant="secondary") }}
+    </form>
+    {% endif %}
+  </div>
+</article>
+{% endmacro %}

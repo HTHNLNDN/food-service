@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+{% from "_macros.html" import button %}
 {% if saved %}
 <div id="toast" class="toast">
   Saved.{% if prefs.language %} Language change takes effect next time you plan the week or
@@ -72,6 +73,6 @@
     severe allergies.</p>
   </fieldset>
 
-  <button type="submit">Save</button>
+  {{ button(t("Save")) }}
 </form>
 {% endblock %}

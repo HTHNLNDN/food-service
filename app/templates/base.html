@@ -1,3 +1,4 @@
+{% from "_macros.html" import nav_tab %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -9,14 +10,12 @@
 <body>
   <header class="site-header">
     <h1>🥗 food-service</h1>
-    <nav>
-      <a href="/">{{ t("This week") }}</a>
-      <a href="/shopping">{{ t("Shopping") }}</a>
-      <a href="/profile">{{ t("Preferences") }}</a>
-      <a href="/cost">{{ t("Cost") }}</a>
-      <a href="/me">{{ t("My data") }}</a>
-    </nav>
   </header>
+  <nav class="tabbar">
+    {{ nav_tab("📅", t("Week"), "/", active=(request.url.path == "/")) }}
+    {{ nav_tab("🛒", t("Shopping"), "/shopping", active=(request.url.path == "/shopping")) }}
+    {{ nav_tab("⋯", t("More"), "/more", active=(request.url.path in ("/more", "/profile", "/cost", "/me"))) }}
+  </nav>
   <main class="container">
     {% block content %}{% endblock %}
   </main>

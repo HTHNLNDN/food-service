@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
+{% from "_macros.html" import button %}
 {% if not plan %}
 <p class="lead">{{ t("No plan to print yet.") }}</p>
 {% else %}
 <div class="print-toolbar">
-  <button onclick="window.print()">{{ t("Print these recipes") }}</button>
+  {{ button(t("Print these recipes"), type="button", onclick="window.print()") }}
 </div>
 {% for r in plan.recipes %}
 <section class="print-recipe">

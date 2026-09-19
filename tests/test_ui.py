@@ -76,6 +76,15 @@ def test_home_shows_plan_button():
     assert "Plan this week" in resp.text
 
 
+def test_more_page_links_to_profile_cost_and_my_data():
+    with TestClient(app) as client:
+        resp = client.get("/more")
+    assert resp.status_code == 200
+    assert 'href="/profile"' in resp.text
+    assert 'href="/cost"' in resp.text
+    assert 'href="/me"' in resp.text
+
+
 def test_plan_this_week_generates_and_renders():
     with TestClient(app) as client:
         _install_fakes(client, [_recipe("Chicken bowl", "chicken breast"),

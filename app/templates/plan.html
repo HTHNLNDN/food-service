@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import button, recipe_card with context %}
 {% block content %}
 {% if planning %}
 <div class="page-head"><h2>{{ t("Planning your week…") }}</h2></div>
@@ -19,7 +20,7 @@
         <input type="text" name="use_up" value="{{ plan.use_up if plan else '' }}"
                placeholder="e.g. 3 kg chicken breast, freezer veg">
       </label>
-      <button type="submit">{{ t("Re-plan this week") if plan else t("Plan this week") }}</button>
+      {{ button(t("Re-plan this week") if plan else t("Plan this week")) }}
     </form>
   </div>
 </div>
@@ -45,43 +46,7 @@ in <code>.env</code> to enable planning (see <code>.env.example</code>).</p>
 
 <div class="cards">
   {% for r in plan.recipes %}
-  <article class="card{% if r.flagged %} flagged{% endif %}{% if loop.index0 == declining_slot %} declining{% endif %}">
-    <div class="card-head">
-      <h3>{{ r.title_translated or r.title }}</h3>
-      {% if r.flagged %}<span class="badge" title="{{ t('Macros could not be verified within targets') }}">{{ t("off-target") }}</span>{% endif %}
-    </div>
-    <p class="macros">
-      {{ r.per_serving.kcal | round | int }} kcal ·
-      {{ r.per_serving.protein_g | round | int }} g protein ·
-      {{ r.per_serving.fibre_g | round | int }} g fibre ·
-      {{ r.per_serving.carbs_g | round | int }} g carbs ·
-      {{ r.per_serving.fat_g | round | int }} g fat
-      <span class="muted">/ serving ({{ r.servings }} servings cooked)</span>
-    </p>
-    <details>
-      <summary>{{ t("Ingredients & steps") }}</summary>
-      <ul class="ingredients">
-        {% for ing in r.ingredients %}<li>{{ ing.grams | round | int }} g
-          {{ (r.ingredient_translations or {}).get(ing.name, ing.name) }}</li>{% endfor %}
-      </ul>
-      <ol class="steps">
-        {% for step in (r.steps_translated or r.steps) %}<li>{{ step }}</li>{% endfor %}
-      </ol>
-    </details>
-    <div class="card-actions">
-      {% if loop.index0 == declining_slot %}
-      <span class="muted card-busy">⏳ {{ t("Finding a replacement…") }}</span>
-      {% else %}
-      <form method="post" action="/plan/{{ loop.index0 }}/rate" class="rate">
-        <button name="score" value="1" class="ghost" title="{{ t('Like — more like this') }}">👍</button>
-        <button name="score" value="-1" class="ghost" title="{{ t('Dislike — avoid this') }}">👎</button>
-      </form>
-      <form method="post" action="/plan/{{ loop.index0 }}/decline">
-        <button type="submit" class="secondary">{{ t("Decline & replace") }}</button>
-      </form>
-      {% endif %}
-    </div>
-  </article>
+    {{ recipe_card(r, loop.index0, declining_slot) }}
   {% endfor %}
 </div>
 

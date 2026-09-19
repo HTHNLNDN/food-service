@@ -54,6 +54,16 @@ class _FakeMatcher:
         return {n: (0 if "chicken" in n else None) for n in ingredients}  # chicken -> offer, rest not
 
 
+class _FakeTranslator:
+    def translate(self, title, steps, ingredient_names, language):
+        return None  # not exercised here — only the UI-chrome batch path matters for this test
+
+    def translate_batch(self, texts, language):
+        # Deliberately long stand-in "translations" — longer than any real Danish string in
+        # app/i18n.py's catalog, to prove the layout survives worse than the real case.
+        return ["Afvis dette forslag til middagsret og find en ny erstatning i stedet" for _ in texts]
+
+
 def _fake_build(config, conn):
     return Services(_FakeAgent(), _FakeOffers(), _FakeNutrition(), _FakeMatcher())
 
@@ -164,3 +174,75 @@ def test_ban_removes_fish_from_plan(live_server, page):
     content = page.content()
     assert "Trout" not in content        # fish dish banned & replaced
     assert "Backup Dinner" in content    # the replacement
+
+
+def test_no_horizontal_overflow_with_long_translated_text(live_server, page):
+    def build(config, conn):
+        return Services(_FakeAgent(), _FakeOffers(), _FakeNutrition(), _FakeMatcher(),
+                         _FakeTranslator())
+
+    # Install the fake translator BEFORE saving the profile: profile_save() calls
+    # i18n.warm() synchronously, which no-ops if request.app.state.build_services doesn't
+    # yet resolve to a translator — installing it after the save would leave the static
+    # UI-chrome cache (nav/button labels) untranslated and this test would pass for the
+    # wrong reason (only recipe content would be long, not the chrome that actually broke).
+    app.state.build_services = build
+
+    page.set_viewport_size({"width": 360, "height": 780})  # narrow phone width
+
+    page.goto(f"{live_server}/profile")
+    page.fill("input[name=min_protein_g]", "5")
+    page.fill("input[name=servings]", "2")
+    page.check("input[value='rema']")
+    page.fill("input[name=language]", "Danish")
+    page.click("button[type=submit]")
+
+    page.goto(live_server)
+    # Not `text=Plan this week` — that button's text is translated now too (the fake
+    # translator applies to every cached UI string, chrome included), so select by
+    # structure instead of by English copy.
+    page.click(".plan-form button[type=submit]")
+    page.wait_for_selector(".card")
+
+    overflow = page.evaluate(
+        "document.documentElement.scrollWidth > document.documentElement.clientWidth"
+    )
+    assert not overflow, "page overflows horizontally at mobile width with long translated text"
+
+
+def test_bottom_tab_bar_navigates_between_pages(live_server, page):
+    page.set_viewport_size({"width": 360, "height": 780})
+    page.goto(live_server)
+    page.wait_for_selector("nav.tabbar")
+    assert page.evaluate(
+        "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
+
+    page.click("nav.tabbar >> text=Shopping")
+    page.wait_for_url("**/shopping")
+
+    page.click("nav.tabbar >> text=More")
+    page.wait_for_url("**/more")
+    assert "Preferences" in page.content()
+    assert "Cost" in page.content()
+    assert "My data" in page.content()
+
+    page.click("text=Preferences")
+    page.wait_for_url("**/profile")
+
+
+def test_tab_bar_renders_above_content_on_desktop(live_server, page):
+    # At the desktop breakpoint (>=768px) the tab bar switches from `position: fixed`
+    # (viewport-pinned, DOM order irrelevant) to `position: static` (normal document
+    # flow, DOM order determines rendered position). It must appear above the main
+    # content, as a top bar, not below it.
+    page.set_viewport_size({"width": 1024, "height": 800})
+    page.goto(live_server)
+    page.wait_for_selector("nav.tabbar")
+    page.wait_for_selector("main.container")
+
+    nav_box = page.locator("nav.tabbar").bounding_box()
+    main_box = page.locator("main.container").bounding_box()
+    assert nav_box["y"] < main_box["y"], (
+        "tab bar should render above the main content on desktop viewports"
+    )
