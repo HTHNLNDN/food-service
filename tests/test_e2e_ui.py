@@ -246,3 +246,27 @@ def test_tab_bar_renders_above_content_on_desktop(live_server, page):
     assert nav_box["y"] < main_box["y"], (
         "tab bar should render above the main content on desktop viewports"
     )
+
+
+def test_tabbar_hidden_in_print_media(live_server, page):
+    # Regression test: `.tabbar` is a class selector (specificity 0,1,0) with an
+    # unscoped `display: flex` rule, which beats the print stylesheet's `nav { display:
+    # none }` (element selector, specificity 0,0,1) regardless of source order. That let
+    # the fixed-position tab bar print once, anchored over the first page, in every
+    # browser's print preview/PDF output — caught during manual verification, not by any
+    # existing test. The fix targets `.tabbar` explicitly in the print rule so the
+    # specificities match and source order (print rule comes later) decides correctly.
+    page.goto(f"{live_server}/profile")
+    page.fill("input[name=min_protein_g]", "5")
+    page.fill("input[name=servings]", "2")
+    page.check("input[value='rema']")
+    page.click("button[type=submit]")
+    page.goto(live_server)
+    page.click(".plan-form button[type=submit]")
+    page.wait_for_selector(".card")
+
+    page.goto(f"{live_server}/print")
+    page.wait_for_selector("nav.tabbar")
+    page.emulate_media(media="print")
+    display = page.eval_on_selector("nav.tabbar", "el => getComputedStyle(el).display")
+    assert display == "none", "tab bar must not render in print media"

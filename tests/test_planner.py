@@ -1,7 +1,14 @@
 from app.agent import PlanContext, Recipe
 from app.db import bootstrap, connect
 from app.nutrition import Ingredient, Macros
-from app.planner import decline, generate_plan, load_latest_plan, weekday_meals
+from app.planner import (
+    PlannedRecipe,
+    decline,
+    generate_plan,
+    is_print_compact,
+    load_latest_plan,
+    weekday_meals,
+)
 from app.profile import Preferences, save_preferences, save_rating
 from app.translate import Translated
 
@@ -368,3 +375,30 @@ def test_decline_translates_the_replacement(tmp_path):
                       nutrition=FakeNutrition(WITHIN), translator=translator)
     assert updated.recipes[0].title_translated == "Fiskeret"
     assert updated.recipes[1].title_translated is None  # untouched sibling stays as it was
+
+
+# --- print compact-mode threshold (app/planner.py) ---
+
+WITHIN_MACROS = Macros(500, 40, 20, 15)
+
+
+def _print_compact_recipe(n_ingredients: int, n_steps: int) -> PlannedRecipe:
+    ingredients = [Ingredient(f"ingredient {i}", 10) for i in range(n_ingredients)]
+    steps = [f"Step {i} of the recipe." for i in range(n_steps)]
+    return PlannedRecipe("Test dish", 4, ingredients, steps, WITHIN_MACROS, False)
+
+
+def test_is_print_compact_false_for_realistic_recipe():
+    assert is_print_compact(_print_compact_recipe(13, 9)) is False  # observed real max: 13 ingredients, 9 steps
+
+
+def test_is_print_compact_true_at_ingredient_threshold():
+    assert is_print_compact(_print_compact_recipe(14, 5)) is True
+
+
+def test_is_print_compact_true_at_step_threshold():
+    assert is_print_compact(_print_compact_recipe(5, 10)) is True
+
+
+def test_is_print_compact_false_just_below_both_thresholds():
+    assert is_print_compact(_print_compact_recipe(13, 9)) is False

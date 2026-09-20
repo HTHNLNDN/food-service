@@ -47,6 +47,14 @@ class PlannedRecipe:
     ingredient_translations: dict[str, str] | None = None  # English name -> translated name
 
 
+def is_print_compact(recipe: PlannedRecipe) -> bool:
+    """Whether a printed A5 recipe page needs the compact CSS tier to avoid overflowing one
+    page. Thresholds are set above the largest ingredient/step counts this app has ever
+    generated (13 ingredients, 9 steps), validated by direct measurement against real A5
+    content-box dimensions."""
+    return len(recipe.ingredients) >= 14 or len(recipe.steps) >= 10
+
+
 @dataclass(frozen=True)
 class Plan:
     id: int

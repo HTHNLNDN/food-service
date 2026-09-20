@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.dates import iso_week
 from app.db import Conn, connect
-from app.planner import decline, generate_plan, load_latest_plan, weekday_meals
+from app.planner import decline, generate_plan, is_print_compact, load_latest_plan, weekday_meals
 from app.profile import save_rating, selected_store_slugs
 from app.shopping import build_shopping_list
 
@@ -125,7 +125,8 @@ def home(request: Request, conn: Conn):
 @router.get("/print", response_class=HTMLResponse)
 def print_recipes(request: Request, conn: Conn):
     return request.app.state.templates.TemplateResponse(
-        request, "print.html", {"title": "Recipes", "plan": load_latest_plan(conn)}
+        request, "print.html",
+        {"title": "Recipes", "plan": load_latest_plan(conn), "is_print_compact": is_print_compact},
     )
 
 

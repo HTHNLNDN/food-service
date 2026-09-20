@@ -88,3 +88,25 @@ def test_print_page_lists_recipes_with_steps():
     assert resp.status_code == 200
     assert "Chicken bowl" in resp.text
     assert "Grill it" in resp.text
+
+
+def test_print_recipe_gets_compact_class_when_long():
+    with TestClient(app) as client:
+        conn = connect(client.app.state.config.db_path)
+        save_preferences(conn, Preferences(600, 40, "PCOS", 2, ["rema"]))
+        long_ingredients = [Ingredient(f"ingredient {i}", 10) for i in range(14)]
+        long_steps = [f"Step {i} of the recipe." for i in range(10)]
+        _persist(conn, [PlannedRecipe("Long dish", 4, long_ingredients, long_steps,
+                                      Macros(500, 45, 10, 15), False)])
+        resp = client.get("/print")
+    assert resp.status_code == 200
+    assert 'class="print-recipe compact"' in resp.text
+
+
+def test_print_recipe_stays_normal_class_when_short():
+    with TestClient(app) as client:
+        _seed(connect(client.app.state.config.db_path))
+        resp = client.get("/print")
+    assert resp.status_code == 200
+    assert 'class="print-recipe compact"' not in resp.text
+    assert 'class="print-recipe"' in resp.text

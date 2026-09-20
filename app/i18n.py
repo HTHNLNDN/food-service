@@ -28,7 +28,7 @@ UI_STRINGS: list[str] = [
     "Not on offer", "Nothing to buy — everything's covered.", "Already have",
     "— using up, don't buy",
     # print.html
-    "No plan to print yet.", "Print these recipes", "Ingredients", "Steps", "Save",
+    "No plan to print yet.", "Print these recipes", "Ingredients", "Steps", "Save", "Notes",
 ]
 
 

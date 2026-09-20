@@ -8,19 +8,28 @@
   {{ button(t("Print these recipes"), type="button", onclick="window.print()") }}
 </div>
 {% for r in plan.recipes %}
-<section class="print-recipe">
+<section class="print-recipe{% if is_print_compact(r) %} compact{% endif %}">
   <h2>{{ r.title_translated or r.title }}</h2>
-  <p class="macros">
-    {{ r.per_serving.kcal | round | int }} kcal ·
-    {{ r.per_serving.protein_g | round | int }} g protein ·
-    {{ r.per_serving.fibre_g | round | int }} g fibre / serving ·
-    {{ r.servings }} servings
-  </p>
-  <h3>{{ t("Ingredients") }}</h3>
-  <ul>{% for i in r.ingredients %}<li>{{ i.grams | round | int }} g
-    {{ (r.ingredient_translations or {}).get(i.name, i.name) }}</li>{% endfor %}</ul>
-  <h3>{{ t("Steps") }}</h3>
-  <ol>{% for s in (r.steps_translated or r.steps) %}<li>{{ s }}</li>{% endfor %}</ol>
+  <div class="stats-line">
+    <b>{{ r.per_serving.kcal | round | int }} kcal</b> ·
+    <b>{{ r.per_serving.protein_g | round | int }}g</b> protein ·
+    <b>{{ r.per_serving.carbs_g | round | int }}g</b> carbs ·
+    <b>{{ r.per_serving.fat_g | round | int }}g</b> fat ·
+    <b>{{ r.per_serving.fibre_g | round | int }}g</b> fibre ·
+    <b>{{ r.servings }}</b> servings
+  </div>
+  <div class="cols">
+    <div class="ing">
+      <h3>{{ t("Ingredients") }}</h3>
+      <ul>{% for i in r.ingredients %}<li>{{ i.grams | round | int }} g
+        {{ (r.ingredient_translations or {}).get(i.name, i.name) }}</li>{% endfor %}</ul>
+    </div>
+    <div class="steps">
+      <h3>{{ t("Steps") }}</h3>
+      <ol>{% for s in (r.steps_translated or r.steps) %}<li>{{ s }}</li>{% endfor %}</ol>
+    </div>
+  </div>
+  <div class="notes">{{ t("Notes") }} ______________________</div>
 </section>
 {% endfor %}
 {% endif %}
