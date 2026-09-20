@@ -124,9 +124,16 @@ def home(request: Request, conn: Conn):
 
 @router.get("/print", response_class=HTMLResponse)
 def print_recipes(request: Request, conn: Conn):
+    plan = load_latest_plan(conn)
+    # _shopping_for shares /shopping's cold-cache network profile (ShelfAtlas + LLM matcher,
+    # cached per ISO-week) — on first load this week, /print can block on that the same way
+    # /shopping does. Degrades gracefully either way: recipes always render regardless.
     return request.app.state.templates.TemplateResponse(
         request, "print.html",
-        {"title": "Recipes", "plan": load_latest_plan(conn), "is_print_compact": is_print_compact},
+        {
+            "title": "Recipes", "plan": plan, "is_print_compact": is_print_compact,
+            "shopping": _shopping_for(request, conn, plan),
+        },
     )
 
 

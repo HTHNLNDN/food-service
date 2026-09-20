@@ -146,6 +146,34 @@ def test_shopping_view_has_offer_and_non_offer_sections():
     assert 'class="tick"' in shop and "shopping-" in shop    # checkboxes + per-plan localStorage
 
 
+def test_print_page_includes_shopping_list_when_stores_selected():
+    with TestClient(app) as client:
+        _install_fakes(
+            client,
+            [_recipe("Chicken dinner", "chicken breast", "rice")],
+            _recipe("B", "eggs"),
+            [FakeOffer("rema", "Kyllingebryst", 39)],
+            matches={"chicken breast": 0},  # chicken is on offer; rice is not
+        )
+        _set_profile(client)
+        client.post("/plan", follow_redirects=False)
+        printed = client.get("/print").text
+    assert 'class="print-shopping"' in printed
+    assert "On offer" in printed and "Kyllingebryst" in printed and "DKK" in printed
+    assert "Not on offer" in printed and "rice" in printed
+
+
+def test_print_page_omits_shopping_section_without_stores():
+    with TestClient(app) as client:
+        _install_fakes(client, [_recipe("Chicken dinner", "chicken breast")],
+                       _recipe("B", "eggs"), [])
+        client.post("/profile", data={"max_kcal": "600", "min_protein_g": "5", "servings": "2"},
+                    follow_redirects=False)  # no "stores" key -> none selected
+        client.post("/plan", follow_redirects=False)
+        printed = client.get("/print").text
+    assert 'class="print-shopping"' not in printed
+
+
 def test_planning_runs_in_background_then_shows_plan():
     import time
 

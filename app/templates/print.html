@@ -32,5 +32,31 @@
   <div class="notes">{{ t("Notes") }} ______________________</div>
 </section>
 {% endfor %}
+
+{% if shopping and (shopping.items or shopping.unmatched) %}
+<section class="print-shopping">
+  <h2>{{ t("Shopping list") }}</h2>
+  {% if shopping.items %}
+  <h3>{{ t("On offer") }} <span class="muted">— {{ shopping.total }} DKK</span></h3>
+  {% for store, items in shopping.by_store().items() %}
+  <p class="store">{{ store }}</p>
+  <ul class="print-checklist">
+    {% for i in items %}
+    <li><span class="print-check"></span> <span class="amt">{{ i.amount }}</span>
+      {{ i.label }} <span class="muted">{{ i.offer_name }}</span> <b class="price">{{ i.price }} DKK</b></li>
+    {% endfor %}
+  </ul>
+  {% endfor %}
+  {% endif %}
+  {% if shopping.unmatched %}
+  <h3>{{ t("Not on offer") }}</h3>
+  <ul class="print-checklist">
+    {% for u in shopping.unmatched %}
+    <li><span class="print-check"></span> <span class="amt">{{ u.amount }}</span> {{ u.label }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
 {% endif %}
 {% endblock %}

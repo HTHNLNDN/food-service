@@ -223,6 +223,20 @@ button.ghost:hover { border-color: var(--accent-strong); filter: none; }
 .print-recipe.compact .steps li { margin-bottom: 3px; }
 .print-recipe.compact .notes { padding-top: 6px; }
 
+.print-shopping { max-width: 640px; font-family: system-ui, sans-serif; }
+.print-shopping h2 { font-size: 19px; font-weight: 700; line-height: 1.15;
+  font-family: Georgia, "Times New Roman", serif;
+  border-bottom: 2px solid var(--accent-strong); padding-bottom: 8px; margin: 0 0 10px; }
+.print-shopping h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--accent-strong); margin: 14px 0 6px; font-weight: 600; }
+.print-shopping .store { font-size: 10px; font-weight: 600; color: var(--muted);
+  margin: 10px 0 4px; text-transform: capitalize; }
+.print-checklist { list-style: none; padding: 0; margin: 0; font-size: 10.5px; line-height: 1.6; }
+.print-checklist li { padding: 2px 0; border-bottom: 1px dotted var(--border); break-inside: avoid; }
+.print-check { display: inline-block; width: 9px; height: 9px; border: 1px solid var(--text);
+  margin-right: 6px; vertical-align: middle; }
+.print-shopping .price { font-weight: 600; }
+
 /* shopping view */
 .shop-section { margin: var(--space-5) 0; max-width: 640px; }
 .shop-section h3 { margin: 0 0 var(--space-2); }
