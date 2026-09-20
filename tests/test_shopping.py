@@ -10,6 +10,9 @@ from app.offers import Offer
 from app.planner import PlannedRecipe
 from app.shopping import (
     LLMOfferMatcher,
+    ShoppingItem,
+    ShoppingList,
+    UnmatchedItem,
     _human_amount,
     build_shopping_list,
 )
@@ -103,7 +106,7 @@ def test_by_store_groups_items():
     offers = [_offer("rema", "Broccoli", 8), _offer("foetex", "Kyllingebryst", 20)]
     matcher = FakeMatcher({"broccoli": 0, "chicken breast": 1})
     sl = build_shopping_list(recipes, offers, ["rema", "foetex"], matcher=matcher)
-    grouped = sl.by_store()
+    grouped = sl.by_store_and_section()
     assert set(grouped) == {"rema", "foetex"}
 
 
@@ -308,3 +311,51 @@ def test_llm_matcher_short_circuits_with_no_offers():
     m = _matcher(handler)
     assert m.match(["broccoli"], []) == {"broccoli": None}
     assert calls["n"] == 0  # no offers -> no LLM call
+
+
+# --- store-section grouping (app/sections.py) ---
+
+
+def test_item_section_property_matches_section_for():
+    item = ShoppingItem("chicken breast", 400, "Kylling", Decimal(20), "rema")
+    assert item.section == "Meat, poultry & fish"
+    unmatched = UnmatchedItem("broccoli", 300)
+    assert unmatched.section == "Fruit & vegetables"
+
+
+def test_by_store_and_section_groups_in_walk_order_per_store():
+    items = [
+        ShoppingItem("chicken breast", 400, "Kylling", Decimal(20), "rema"),
+        ShoppingItem("broccoli", 300, "Broccoli", Decimal(10), "rema"),
+        ShoppingItem("butter", 200, "Smør", Decimal(15), "netto"),
+    ]
+    lst = ShoppingList(items=items, unmatched=[], total=Decimal(45))
+    grouped = lst.by_store_and_section()
+
+    assert list(grouped.keys()) == ["rema", "netto"]  # store order = insertion order of items
+    rema_sections = list(grouped["rema"].keys())
+    # produce comes before meat_fish in SECTIONS order, regardless of item insertion order above
+    assert rema_sections == ["Fruit & vegetables", "Meat, poultry & fish"]
+    assert grouped["rema"]["Fruit & vegetables"] == [items[1]]
+    assert grouped["rema"]["Meat, poultry & fish"] == [items[0]]
+    assert grouped["netto"] == {"Dairy & eggs": [items[2]]}
+
+
+def test_by_store_and_section_omits_empty_sections():
+    items = [ShoppingItem("water", 1000, "Vand", Decimal(5), "rema")]
+    lst = ShoppingList(items=items, unmatched=[], total=Decimal(5))
+    grouped = lst.by_store_and_section()
+    assert list(grouped["rema"].keys()) == ["Beverages"]  # only the one populated section
+
+
+def test_by_section_groups_unmatched_items_in_walk_order():
+    unmatched = [
+        UnmatchedItem("rice", 500),
+        UnmatchedItem("carrot", 200),
+    ]
+    lst = ShoppingList(items=[], unmatched=unmatched, total=Decimal(0))
+    grouped = lst.by_section()
+    # produce ("carrot") before pantry ("rice") in SECTIONS order, despite insertion order above
+    assert list(grouped.keys()) == ["Fruit & vegetables", "Pantry & dry goods"]
+    assert grouped["Fruit & vegetables"] == [unmatched[1]]
+    assert grouped["Pantry & dry goods"] == [unmatched[0]]

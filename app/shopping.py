@@ -21,6 +21,7 @@ from app.history import _norm_ing
 from app.llm import chat_completion, extract_json_object
 from app.offers import Offer
 from app.planner import PlannedRecipe
+from app.sections import SECTION_DISPLAY, section_for
 
 
 def _human_amount(grams: float) -> str:
@@ -48,6 +49,10 @@ class ShoppingItem:
     def label(self) -> str:
         return self.display_name or self.ingredient
 
+    @property
+    def section(self) -> str:
+        return SECTION_DISPLAY[section_for(self.ingredient)]
+
 
 @dataclass(frozen=True)
 class UnmatchedItem:
@@ -63,6 +68,10 @@ class UnmatchedItem:
     def label(self) -> str:
         return self.display_name or self.ingredient
 
+    @property
+    def section(self) -> str:
+        return SECTION_DISPLAY[section_for(self.ingredient)]
+
 
 @dataclass(frozen=True)
 class ShoppingList:
@@ -71,11 +80,28 @@ class ShoppingList:
     total: Decimal
     already_have: list[UnmatchedItem] = field(default_factory=list)  # user's use-up items, not bought
 
-    def by_store(self) -> dict[str, list[ShoppingItem]]:
-        grouped: dict[str, list[ShoppingItem]] = {}
+    def by_store_and_section(self) -> dict[str, dict[str, list[ShoppingItem]]]:
+        by_store: dict[str, list[ShoppingItem]] = {}
         for item in self.items:
-            grouped.setdefault(item.chain_slug, []).append(item)
-        return grouped
+            by_store.setdefault(item.chain_slug, []).append(item)
+        section_order = list(SECTION_DISPLAY.values())
+        result: dict[str, dict[str, list[ShoppingItem]]] = {}
+        for store, store_items in by_store.items():
+            by_section: dict[str, list[ShoppingItem]] = {}
+            for item in store_items:
+                by_section.setdefault(item.section, []).append(item)
+            # rebuild in SECTIONS order so Jinja iterates the intended walk order, not
+            # insertion order — a dict comprehension over section_order, keeping only
+            # sections that actually have items for this store
+            result[store] = {s: by_section[s] for s in section_order if s in by_section}
+        return result
+
+    def by_section(self) -> dict[str, list[UnmatchedItem]]:
+        by_section: dict[str, list[UnmatchedItem]] = {}
+        for item in self.unmatched:
+            by_section.setdefault(item.section, []).append(item)
+        section_order = list(SECTION_DISPLAY.values())
+        return {s: by_section[s] for s in section_order if s in by_section}
 
 
 class OfferMatcher(Protocol):

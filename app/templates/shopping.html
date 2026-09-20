@@ -14,8 +14,10 @@
 {% if shopping.items %}
 <section class="shop-section">
   <h3>{{ t("On offer") }} <span class="muted">— {{ shopping.total }} DKK</span></h3>
-  {% for store, items in shopping.by_store().items() %}
+  {% for store, sections in shopping.by_store_and_section().items() %}
   <p class="store">{{ store }}</p>
+  {% for section, items in sections.items() %}
+  <p class="section">{{ t(section) }}</p>
   <ul class="checklist">
     {% for i in items %}
     <li><label>
@@ -26,20 +28,24 @@
     {% endfor %}
   </ul>
   {% endfor %}
+  {% endfor %}
 </section>
 {% endif %}
 
 {% if shopping.unmatched %}
 <section class="shop-section">
   <h3>{{ t("Not on offer") }}</h3>
+  {% for section, items in shopping.by_section().items() %}
+  <p class="section">{{ t(section) }}</p>
   <ul class="checklist">
-    {% for u in shopping.unmatched %}
+    {% for u in items %}
     <li><label>
       <input type="checkbox" class="tick" value="{{ u.ingredient }}">
       <span class="amt">{{ u.amount }}</span> <span class="name">{{ u.label }}</span>
     </label></li>
     {% endfor %}
   </ul>
+  {% endfor %}
 </section>
 {% endif %}
 

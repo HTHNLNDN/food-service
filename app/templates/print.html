@@ -38,8 +38,10 @@
   <h2>{{ t("Shopping list") }}</h2>
   {% if shopping.items %}
   <h3>{{ t("On offer") }} <span class="muted">— {{ shopping.total }} DKK</span></h3>
-  {% for store, items in shopping.by_store().items() %}
+  {% for store, sections in shopping.by_store_and_section().items() %}
   <p class="store">{{ store }}</p>
+  {% for section, items in sections.items() %}
+  <p class="section">{{ t(section) }}</p>
   <ul class="print-checklist">
     {% for i in items %}
     <li><span class="print-check"></span> <span class="amt">{{ i.amount }}</span>
@@ -47,14 +49,18 @@
     {% endfor %}
   </ul>
   {% endfor %}
+  {% endfor %}
   {% endif %}
   {% if shopping.unmatched %}
   <h3>{{ t("Not on offer") }}</h3>
+  {% for section, items in shopping.by_section().items() %}
+  <p class="section">{{ t(section) }}</p>
   <ul class="print-checklist">
-    {% for u in shopping.unmatched %}
+    {% for u in items %}
     <li><span class="print-check"></span> <span class="amt">{{ u.amount }}</span> {{ u.label }}</li>
     {% endfor %}
   </ul>
+  {% endfor %}
   {% endif %}
 </section>
 {% endif %}

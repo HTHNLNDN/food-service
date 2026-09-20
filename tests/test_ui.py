@@ -146,6 +146,38 @@ def test_shopping_view_has_offer_and_non_offer_sections():
     assert 'class="tick"' in shop and "shopping-" in shop    # checkboxes + per-plan localStorage
 
 
+def test_shopping_view_groups_items_by_section():
+    with TestClient(app) as client:
+        _install_fakes(
+            client,
+            [_recipe("Chicken dinner", "chicken breast", "broccoli")],
+            _recipe("B", "eggs"),
+            [FakeOffer("rema", "Kyllingebryst", 39), FakeOffer("rema", "Broccoli", 12)],
+            matches={"chicken breast": 0, "broccoli": 1},  # both on offer, different sections
+        )
+        _set_profile(client)
+        client.post("/plan", follow_redirects=False)
+        shop = client.get("/shopping").text
+    assert "Fruit &amp; vegetables" in shop or "Fruit & vegetables" in shop
+    assert "Meat, poultry &amp; fish" in shop or "Meat, poultry & fish" in shop
+
+
+def test_print_page_groups_shopping_items_by_section():
+    with TestClient(app) as client:
+        _install_fakes(
+            client,
+            [_recipe("Chicken dinner", "chicken breast", "rice")],
+            _recipe("B", "eggs"),
+            [FakeOffer("rema", "Kyllingebryst", 39)],
+            matches={"chicken breast": 0},  # chicken on offer (meat_fish); rice unmatched (pantry)
+        )
+        _set_profile(client)
+        client.post("/plan", follow_redirects=False)
+        printed = client.get("/print").text
+    assert "Meat, poultry &amp; fish" in printed or "Meat, poultry & fish" in printed
+    assert "Pantry &amp; dry goods" in printed or "Pantry & dry goods" in printed
+
+
 def test_print_page_includes_shopping_list_when_stores_selected():
     with TestClient(app) as client:
         _install_fakes(
