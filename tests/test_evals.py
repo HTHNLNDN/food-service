@@ -72,7 +72,7 @@ class _FakeMatcher:
         return {n: None for n in ingredients}
 
 
-def test_run_scenario_produces_metrics_with_fakes(monkeypatch):
+def test_run_scenario_produces_metrics_with_fakes(db, monkeypatch):
     from app import telemetry
     from app.config import load_config
 

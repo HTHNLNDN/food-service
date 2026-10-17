@@ -5,7 +5,7 @@ the `llm_calls` table. Attribute names mirror the OpenTelemetry GenAI semantic c
 this is portable to an OTel backend later. Writing is best-effort and MUST never break a request.
 
 Usage:
-    telemetry.configure(db_path)                       # once, at startup
+    telemetry.configure(pool)                          # once, at startup
     with telemetry.session() as trace_id:              # group one operation's calls
         with telemetry.record("plan_week", "gemini", model, grounded=True):
             ...                                        # the HTTP layer calls set_usage()
@@ -13,24 +13,26 @@ Usage:
 """
 
 import contextvars
-import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 
-_DB_PATH: Path | None = None  # process-global sink target; readable from any thread
+import psycopg
+from psycopg_pool import ConnectionPool
+
+_POOL: ConnectionPool | None = None  # process-global sink; thread-safe, shared by any thread
+_WRITE_TIMEOUT_S = 2  # never let a busy/dead DB stall an LLM call for long
 _trace: contextvars.ContextVar = contextvars.ContextVar("llm_trace", default=None)
 _tenant: contextvars.ContextVar = contextvars.ContextVar("llm_tenant", default="me")
 _current: contextvars.ContextVar = contextvars.ContextVar("llm_current", default=None)
 
 
-def configure(db_path: Path | None) -> None:
-    """Enable telemetry writes to `db_path` (or disable with None)."""
-    global _DB_PATH
-    _DB_PATH = db_path
+def configure(pool: ConnectionPool | None) -> None:
+    """Enable telemetry writes through `pool` (or disable with None)."""
+    global _POOL
+    _POOL = pool
 
 
 @dataclass
@@ -102,34 +104,32 @@ def bump_retry() -> None:
         c.retries += 1
 
 
-def link_plan(conn: sqlite3.Connection, trace_id: str | None, plan_id: int) -> None:
+def link_plan(conn: psycopg.Connection, trace_id: str | None, plan_id: int) -> None:
     """Attribute a trace's calls to the plan they produced (called after the plan persists)."""
     if trace_id is None:
         return
     try:
-        conn.execute("UPDATE llm_calls SET plan_id = ? WHERE trace_id = ? AND plan_id IS NULL",
+        conn.execute("UPDATE llm_calls SET plan_id = %s WHERE trace_id = %s AND plan_id IS NULL",
                      (plan_id, trace_id))
-        conn.commit()
-    except sqlite3.Error:
+    except psycopg.Error:
         pass
 
 
 def _write(call: _Call, latency_ms: int, ok: bool, error: str | None) -> None:
-    if _DB_PATH is None:
+    pool = _POOL
+    if pool is None:
         return
     try:
-        conn = sqlite3.connect(_DB_PATH)
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute(
-            "INSERT INTO llm_calls (ts, tenant_id, trace_id, call_type, provider, model, grounded, "
-            "input_tokens, output_tokens, thinking_tokens, total_tokens, search_queries, retries, "
-            "latency_ms, ok, finish_reason, error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (datetime.now(UTC).isoformat(), _tenant.get(), _trace.get(), call.call_type,
-             call.provider, call.model, int(call.grounded), call.input_tokens, call.output_tokens,
-             call.thinking_tokens, call.total_tokens, call.search_queries, call.retries,
-             latency_ms, int(ok), call.finish_reason, error),
-        )
-        conn.commit()
-        conn.close()
-    except sqlite3.Error:
+        with pool.connection(timeout=_WRITE_TIMEOUT_S) as conn:
+            conn.execute(
+                "INSERT INTO llm_calls (ts, tenant_id, trace_id, call_type, provider, model, grounded, "
+                "input_tokens, output_tokens, thinking_tokens, total_tokens, search_queries, retries, "
+                "latency_ms, ok, finish_reason, error) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (datetime.now(UTC), _tenant.get(), _trace.get(), call.call_type,
+                 call.provider, call.model, bool(call.grounded), call.input_tokens, call.output_tokens,
+                 call.thinking_tokens, call.total_tokens, call.search_queries, call.retries,
+                 latency_ms, bool(ok), call.finish_reason, error),
+            )
+    except psycopg.Error:  # includes PoolTimeout
         pass  # telemetry must never break the app

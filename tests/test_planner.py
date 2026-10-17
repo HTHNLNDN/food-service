@@ -1,5 +1,4 @@
 from app.agent import PlanContext, Recipe
-from app.db import bootstrap, connect
 from app.nutrition import Ingredient, Macros
 from app.planner import (
     PlannedRecipe,
@@ -64,9 +63,7 @@ def _recipe(title, grams=400, servings=4):
     )
 
 
-def _conn(tmp_path, *, servings=2, max_kcal=600, min_protein=15, stores=("rema",), bans=(), language=""):
-    conn = connect(tmp_path / "p.db")
-    bootstrap(conn)
+def _conn(conn, *, servings=2, max_kcal=600, min_protein=15, stores=("rema",), bans=(), language=""):
     save_preferences(conn, Preferences(max_kcal, min_protein, "PCOS", servings, list(stores),
                                        list(bans), language))
     return conn
@@ -89,8 +86,8 @@ def _recipe_with(title, ingredient):
     return Recipe(title, 4, [Ingredient(ingredient, 400)], ["cook"])
 
 
-def test_banned_ingredient_is_revised_out(tmp_path):
-    conn = _conn(tmp_path, bans=["fish"])
+def test_banned_ingredient_is_revised_out(conn):
+    conn = _conn(conn, bans=["fish"])
     agent = FakeAgent([_recipe_with("Salmon Dinner", "salmon")], _recipe_with("Chicken Dinner", "chicken"))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN), num_dinners=1)
     assert plan.recipes[0].title == "Chicken Dinner"  # fish dish replaced
@@ -98,8 +95,8 @@ def test_banned_ingredient_is_revised_out(tmp_path):
     assert agent.replace_calls == 1
 
 
-def test_persistently_banned_dish_is_flagged(tmp_path):
-    conn = _conn(tmp_path, bans=["fish"])
+def test_persistently_banned_dish_is_flagged(conn):
+    conn = _conn(conn, bans=["fish"])
     agent = FakeAgent([_recipe_with("Salmon A", "salmon")], _recipe_with("Salmon B", "salmon"))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN), num_dinners=1)
     assert plan.recipes[0].flagged
@@ -109,8 +106,8 @@ def test_persistently_banned_dish_is_flagged(tmp_path):
 # --- use-up ingredients ---
 
 
-def test_use_up_is_persisted_and_passed_to_agent(tmp_path):
-    conn = _conn(tmp_path)
+def test_use_up_is_persisted_and_passed_to_agent(conn):
+    conn = _conn(conn)
     agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
     generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
                   num_dinners=1, use_up="3kg chicken breast")
@@ -118,8 +115,8 @@ def test_use_up_is_persisted_and_passed_to_agent(tmp_path):
     assert load_latest_plan(conn).use_up == "3kg chicken breast"  # persisted on the plan
 
 
-def test_decline_reuses_stored_use_up(tmp_path):
-    conn = _conn(tmp_path)
+def test_decline_reuses_stored_use_up(conn):
+    conn = _conn(conn)
     agent = FakeAgent([_recipe_with("A", "chicken"), _recipe_with("B", "pork")], _recipe_with("R", "cod"))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
                          num_dinners=2, use_up="freezer veg")
@@ -136,8 +133,8 @@ def _seed_dish(conn, title, ingredient):
     generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN), num_dinners=1)
 
 
-def test_recent_dish_is_revised_out(tmp_path):
-    conn = _conn(tmp_path)
+def test_recent_dish_is_revised_out(conn):
+    conn = _conn(conn)
     _seed_dish(conn, "Repeat Dish", "chicken breast")  # last week's dinner
     agent = FakeAgent([_recipe_with("Repeat Dish", "chicken breast")], _recipe_with("Fresh Dish", "cod"))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN), num_dinners=1)
@@ -145,8 +142,8 @@ def test_recent_dish_is_revised_out(tmp_path):
     assert agent.replace_calls == 1
 
 
-def test_liked_dish_may_repeat(tmp_path):
-    conn = _conn(tmp_path)
+def test_liked_dish_may_repeat(conn):
+    conn = _conn(conn)
     _seed_dish(conn, "Loved Dish", "chicken breast")
     save_rating(conn, "Loved Dish", 1, ["chicken breast"])  # 👍 -> exempt from cooldown
     agent = FakeAgent([_recipe_with("Loved Dish", "chicken breast")], _recipe_with("Other", "cod"))
@@ -155,8 +152,8 @@ def test_liked_dish_may_repeat(tmp_path):
     assert agent.replace_calls == 0
 
 
-def test_persistently_repeating_dish_is_flagged(tmp_path):
-    conn = _conn(tmp_path)
+def test_persistently_repeating_dish_is_flagged(conn):
+    conn = _conn(conn)
     _seed_dish(conn, "Repeat Dish", "chicken breast")
     agent = FakeAgent([_recipe_with("Repeat Dish", "chicken breast")],
                       _recipe_with("Repeat Dish", "chicken breast"))  # replacement is the same repeat
@@ -172,8 +169,8 @@ TOO_HOT = Macros(kcal=1000, protein_g=20, carbs_g=0, fat_g=0)
 NEAR = Macros(kcal=630, protein_g=39, carbs_g=0, fat_g=0)  # 30 kcal over, 1 g protein under
 
 
-def test_near_miss_macros_are_accepted_within_slack(tmp_path):
-    conn = _conn(tmp_path, max_kcal=600, min_protein=40)
+def test_near_miss_macros_are_accepted_within_slack(conn):
+    conn = _conn(conn, max_kcal=600, min_protein=40)
     agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(NEAR), num_dinners=1)
     assert not plan.recipes[0].flagged   # 630 kcal / 39 g protein tolerated
@@ -191,8 +188,8 @@ class _PartialNutrition:
         return None if name in self.missing else (1, self.per100)
 
 
-def test_tiny_unresolved_ingredient_is_tolerated(tmp_path):
-    conn = _conn(tmp_path)
+def test_tiny_unresolved_ingredient_is_tolerated(conn):
+    conn = _conn(conn)
     dish = Recipe("Spiced Chicken", 4,
                   [Ingredient("chicken breast", 400), Ingredient("garam masala", 5)], ["cook"])
     agent = FakeAgent([dish], replacement=_recipe("R"))
@@ -203,8 +200,8 @@ def test_tiny_unresolved_ingredient_is_tolerated(tmp_path):
     assert agent.replace_calls == 0  # no slow revise over a negligible ingredient
 
 
-def test_large_unresolved_ingredient_still_revises(tmp_path):
-    conn = _conn(tmp_path)
+def test_large_unresolved_ingredient_still_revises(conn):
+    conn = _conn(conn)
     dish = Recipe("Mystery Dish", 4,
                   [Ingredient("chicken breast", 400), Ingredient("exotic root", 200)], ["cook"])
     agent = FakeAgent([dish], replacement=_recipe_with("Clean Dish", "chicken breast"))
@@ -214,8 +211,8 @@ def test_large_unresolved_ingredient_still_revises(tmp_path):
     assert plan.recipes[0].title == "Clean Dish"
 
 
-def test_unresolved_ingredients_are_logged_for_review(tmp_path):
-    conn = _conn(tmp_path)
+def test_unresolved_ingredients_are_logged_for_review(conn):
+    conn = _conn(conn)
     dish = Recipe("Exotic Bowl", 4, [
         Ingredient("chicken breast", 400),   # resolves
         Ingredient("dragon fruit", 100),     # missing, big enough to force a revise
@@ -232,8 +229,8 @@ def test_unresolved_ingredients_are_logged_for_review(tmp_path):
     assert "chicken breast" not in logged                # resolved ingredients aren't logged
 
 
-def test_generate_plan_verifies_macros_and_persists(tmp_path):
-    conn = _conn(tmp_path)
+def test_generate_plan_verifies_macros_and_persists(conn):
+    conn = _conn(conn)
     agent = FakeAgent([_recipe("A"), _recipe("B")], replacement=_recipe("R"))
     plan = generate_plan(
         conn, agent=agent, offers=FakeOffers([FakeOffer("Kylling")]),
@@ -246,8 +243,8 @@ def test_generate_plan_verifies_macros_and_persists(tmp_path):
     assert agent.replace_calls == 0
 
 
-def test_out_of_target_dish_is_revised_then_accepted(tmp_path):
-    conn = _conn(tmp_path)
+def test_out_of_target_dish_is_revised_then_accepted(conn):
+    conn = _conn(conn)
     # first recipe is too hot; replacement is within target
     agent = FakeAgent([_recipe("Hot")], replacement=_recipe("Cool"))
     nutrition = _SwitchingNutrition(first=TOO_HOT, then=WITHIN)
@@ -257,16 +254,16 @@ def test_out_of_target_dish_is_revised_then_accepted(tmp_path):
     assert not plan.recipes[0].flagged
 
 
-def test_persistently_out_of_target_is_flagged_after_bounded_retries(tmp_path):
-    conn = _conn(tmp_path)
+def test_persistently_out_of_target_is_flagged_after_bounded_retries(conn):
+    conn = _conn(conn)
     agent = FakeAgent([_recipe("Hot")], replacement=_recipe("StillHot"))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(TOO_HOT), num_dinners=1)
     assert plan.recipes[0].flagged
     assert agent.replace_calls <= 3  # bounded, no infinite loop
 
 
-def test_plan_persists_and_reloads(tmp_path):
-    conn = _conn(tmp_path)
+def test_plan_persists_and_reloads(conn):
+    conn = _conn(conn)
     agent = FakeAgent([_recipe("A"), _recipe("B")], replacement=_recipe("R"))
     generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN), num_dinners=2)
     loaded = load_latest_plan(conn)
@@ -276,8 +273,8 @@ def test_plan_persists_and_reloads(tmp_path):
     assert loaded.recipes[0].steps == ["cook"]
 
 
-def test_weekday_meals_assigns_one_dinner_per_weekday(tmp_path):
-    conn = _conn(tmp_path)
+def test_weekday_meals_assigns_one_dinner_per_weekday(conn):
+    conn = _conn(conn)
     recipes = [_recipe(t) for t in ("A", "B", "C", "D", "E")]
     agent = FakeAgent(recipes, replacement=_recipe("R"))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN), num_dinners=5)
@@ -287,8 +284,8 @@ def test_weekday_meals_assigns_one_dinner_per_weekday(tmp_path):
     assert [m.title for m in meals] == ["A", "B", "C", "D", "E"]
 
 
-def test_recipe_servings_match_preference_without_lunch_doubling(tmp_path):
-    conn = _conn(tmp_path, servings=2)
+def test_recipe_servings_match_preference_without_lunch_doubling(conn):
+    conn = _conn(conn, servings=2)
     agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
     generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN), num_dinners=1)
     assert agent.last_ctx.servings == 2  # was doubled to 4 for lunches; now cooks just dinner
@@ -308,8 +305,8 @@ class _SwitchingNutrition:
 # --- display translation (English stays the lookup key; translation is display-only) ---
 
 
-def test_translation_is_applied_and_persisted_when_language_is_set(tmp_path):
-    conn = _conn(tmp_path, language="Danish")
+def test_translation_is_applied_and_persisted_when_language_is_set(conn):
+    conn = _conn(conn, language="Danish")
     agent = FakeAgent([_recipe_with("Chicken Bowl", "chicken breast")], replacement=_recipe("R"))
     translated = Translated("Kyllingeskål", ["steg det"], ["kyllingebryst"])
     translator = FakeTranslator(result=translated)
@@ -327,8 +324,8 @@ def test_translation_is_applied_and_persisted_when_language_is_set(tmp_path):
     assert reloaded.ingredient_translations == {"chicken breast": "kyllingebryst"}
 
 
-def test_no_translation_call_when_language_is_blank(tmp_path):
-    conn = _conn(tmp_path, language="")  # default
+def test_no_translation_call_when_language_is_blank(conn):
+    conn = _conn(conn, language="")  # default
     agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
     translator = FakeTranslator(result=Translated("X", ["y"], ["z"]))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
@@ -337,16 +334,16 @@ def test_no_translation_call_when_language_is_blank(tmp_path):
     assert plan.recipes[0].title_translated is None
 
 
-def test_no_translation_when_translator_not_configured(tmp_path):
-    conn = _conn(tmp_path, language="Danish")
+def test_no_translation_when_translator_not_configured(conn):
+    conn = _conn(conn, language="Danish")
     agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
                          num_dinners=1)  # translator defaults to None
     assert plan.recipes[0].title_translated is None
 
 
-def test_translation_failure_falls_back_to_english_without_breaking_the_plan(tmp_path):
-    conn = _conn(tmp_path, language="Danish")
+def test_translation_failure_falls_back_to_english_without_breaking_the_plan(conn):
+    conn = _conn(conn, language="Danish")
     agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
     translator = FakeTranslator(result=None)          # simulates malformed/mismatched LLM output
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
@@ -355,8 +352,8 @@ def test_translation_failure_falls_back_to_english_without_breaking_the_plan(tmp
     assert plan.recipes[0].title_translated is None
 
 
-def test_translator_exception_falls_back_to_english_without_breaking_the_plan(tmp_path):
-    conn = _conn(tmp_path, language="Danish")
+def test_translator_exception_falls_back_to_english_without_breaking_the_plan(conn):
+    conn = _conn(conn, language="Danish")
     agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
     translator = FakeTranslator(raises=RuntimeError("network blip"))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
@@ -365,8 +362,8 @@ def test_translator_exception_falls_back_to_english_without_breaking_the_plan(tm
     assert plan.recipes[0].title_translated is None
 
 
-def test_decline_translates_the_replacement(tmp_path):
-    conn = _conn(tmp_path, language="Danish")
+def test_decline_translates_the_replacement(conn):
+    conn = _conn(conn, language="Danish")
     agent = FakeAgent([_recipe("A"), _recipe("B")], replacement=_recipe_with("Fish Dish", "cod"))
     plan = generate_plan(conn, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(WITHIN),
                          num_dinners=2)  # initial plan generated without translation configured yet

@@ -9,12 +9,12 @@ re-call the model. Ingredients with no offer are listed explicitly with their am
 """
 
 import re
-import sqlite3
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Protocol
 
 import httpx
+import psycopg
 
 from app import telemetry
 from app.history import _norm_ing
@@ -192,7 +192,7 @@ def build_shopping_list(
     selected: list[str],
     *,
     matcher: OfferMatcher | None = None,
-    cache: sqlite3.Connection | None = None,
+    cache: psycopg.Connection | None = None,
     week: str = "",
     have: str = "",
 ) -> ShoppingList:
@@ -245,11 +245,11 @@ def build_shopping_list(
 _MISS = object()
 
 
-def _cache_get(cache: sqlite3.Connection | None, week: str, name: str) -> object:
+def _cache_get(cache: psycopg.Connection | None, week: str, name: str) -> object:
     if cache is None:
         return _MISS
     row = cache.execute(
-        "SELECT offer_name, price, chain_slug FROM offer_match_cache WHERE week = ? AND name = ?",
+        "SELECT offer_name, price, chain_slug FROM offer_match_cache WHERE week = %s AND name = %s",
         (week, name.strip().lower()),
     ).fetchone()
     if row is None:
@@ -259,16 +259,16 @@ def _cache_get(cache: sqlite3.Connection | None, week: str, name: str) -> object
     return (row["offer_name"], Decimal(row["price"]), row["chain_slug"])
 
 
-def _cache_put(cache: sqlite3.Connection | None, week: str, name: str, match: Match | None) -> None:
+def _cache_put(cache: psycopg.Connection | None, week: str, name: str, match: Match | None) -> None:
     if cache is None:
         return
     args = (week, name.strip().lower(), *((match[0], str(match[1]), match[2]) if match else (None, None, None)))
     cache.execute(
-        "INSERT OR REPLACE INTO offer_match_cache(week, name, offer_name, price, chain_slug) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO offer_match_cache(week, name, offer_name, price, chain_slug) "
+        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (week, name) DO UPDATE SET "
+        "offer_name = excluded.offer_name, price = excluded.price, chain_slug = excluded.chain_slug",
         args,
     )
-    cache.commit()
 
 
 # --- LLM matcher ---

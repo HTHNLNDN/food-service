@@ -1,13 +1,13 @@
-import sqlite3
 import threading
 from datetime import UTC, datetime
 from typing import Annotated
 
+import psycopg
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.dates import iso_week
-from app.db import Conn, connect
+from app.db import Conn
 from app.planner import decline, generate_plan, is_print_compact, load_latest_plan, weekday_meals
 from app.profile import save_rating, selected_store_slugs
 from app.shopping import build_shopping_list
@@ -30,14 +30,11 @@ def _friendly(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:400]
 
 
-def _run_job(config, build, work) -> None:
+def _run_job(pool, config, build, work) -> None:
     error = None
     try:
-        conn = connect(config.db_path)  # the thread needs its own connection
-        try:
+        with pool.connection() as conn:  # the thread needs its own connection
             work(conn, build(config, conn))
-        finally:
-            conn.close()
     except Exception as exc:  # noqa: BLE001 - surface planning failures in the UI, never as a 500
         error = _friendly(exc)
     with _plan_lock:
@@ -57,15 +54,16 @@ def _start_job(request: Request, work, *, declining_slot: int | None = None,
         _plan_state["error"] = None
         _plan_state["declining_slot"] = declining_slot
         _plan_state["declining_title"] = declining_title
+    pool = request.app.state.pool
     config = request.app.state.config
     build = request.app.state.build_services
     if getattr(request.app.state, "plan_sync", False):
-        _run_job(config, build, work)  # deterministic path for tests
+        _run_job(pool, config, build, work)  # deterministic path for tests
     else:
-        threading.Thread(target=_run_job, args=(config, build, work), daemon=True).start()
+        threading.Thread(target=_run_job, args=(pool, config, build, work), daemon=True).start()
 
 
-def _shopping_for(request: Request, conn: sqlite3.Connection, plan):
+def _shopping_for(request: Request, conn: psycopg.Connection, plan):
     selected = selected_store_slugs(conn)
     if not (plan and selected):
         return None
@@ -92,7 +90,7 @@ def _still_declining(plan, slot: int | None, title: str | None) -> int | None:
     return slot if plan.recipes[slot].title == title else None
 
 
-def _render_home(request: Request, conn: sqlite3.Connection):
+def _render_home(request: Request, conn: psycopg.Connection):
     with _plan_lock:
         running = _plan_state["running"]
         error = _plan_state["error"]
@@ -150,16 +148,16 @@ def cost(request: Request, conn: Conn):
         "SELECT call_type, model, COUNT(*) n, COALESCE(SUM(input_tokens),0) in_tok, "
         "COALESCE(SUM(output_tokens),0) out_tok, COALESCE(SUM(search_queries),0) sq, "
         "SUM(usd) usd, COALESCE(SUM(retries),0) retries, "
-        "SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END) errs, AVG(latency_ms) avg_ms "
+        "SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END) errs, AVG(latency_ms)::float avg_ms "
         "FROM v_llm_cost GROUP BY call_type, model ORDER BY usd DESC"
     ).fetchall()
     totals = conn.execute("SELECT COUNT(*) n, COALESCE(SUM(usd),0) usd FROM v_llm_cost").fetchone()
     plans = conn.execute(
-        "SELECT p.id, p.created_at, "
+        "SELECT p.id, p.created_at::date::text created_at, "
         "(SELECT COALESCE(SUM(usd),0) FROM v_llm_cost c WHERE c.plan_id = p.id) usd, "
         "(SELECT COUNT(*) FROM llm_calls c WHERE c.plan_id = p.id AND c.call_type='replace') revises, "
         "(SELECT COUNT(*) FROM recipes r WHERE r.plan_id = p.id) dinners, "
-        "(SELECT COALESCE(SUM(flagged),0) FROM recipes r WHERE r.plan_id = p.id) flagged "
+        "(SELECT COALESCE(SUM(flagged::int),0) FROM recipes r WHERE r.plan_id = p.id) flagged "
         "FROM plans p ORDER BY p.id DESC LIMIT 10"
     ).fetchall()
     unpriced = [r["model"] for r in conn.execute(
@@ -172,11 +170,11 @@ def cost(request: Request, conn: Conn):
     )
 
 
-def _weekly_trends(conn: sqlite3.Connection) -> list[dict]:
+def _weekly_trends(conn: psycopg.Connection) -> list[dict]:
     """Efficacy over time, per ISO week — derived from stored plans/recipes/traces, no new spend."""
     weeks = conn.execute(
         "SELECT p.week week, COUNT(DISTINCT p.id) plans, COUNT(r.id) dinners, "
-        "COALESCE(SUM(r.flagged), 0) flagged "
+        "COALESCE(SUM(r.flagged::int), 0) flagged "
         "FROM plans p LEFT JOIN recipes r ON r.plan_id = p.id "
         "GROUP BY p.week ORDER BY p.week DESC LIMIT 8"
     ).fetchall()

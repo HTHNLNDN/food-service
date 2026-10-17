@@ -1,10 +1,8 @@
 import json
-import sqlite3
 from decimal import Decimal
 
 import httpx
 
-from app.db import bootstrap
 from app.nutrition import Ingredient, Macros
 from app.offers import Offer
 from app.planner import PlannedRecipe
@@ -46,13 +44,6 @@ class FakeMatcher:
     def match(self, ingredients, offers):
         self.calls.append(list(ingredients))
         return {name: self.mapping.get(name) for name in ingredients}
-
-
-def _cache():
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    bootstrap(conn)
-    return conn
 
 
 # --- matching + pricing ---
@@ -193,8 +184,7 @@ def test_human_amount_formats_grams_and_kilos():
 # --- per-week cache (renders must not re-call the LLM) ---
 
 
-def test_cache_avoids_a_second_matcher_call_same_week():
-    conn = _cache()
+def test_cache_avoids_a_second_matcher_call_same_week(conn):
     recipes = [_recipe("broccoli"), _recipe(("quinoa", 250))]
     offers = [_offer("rema", "Broccoli", 8)]
     matcher = FakeMatcher({"broccoli": 0, "quinoa": None})
@@ -207,8 +197,7 @@ def test_cache_avoids_a_second_matcher_call_same_week():
     assert [u.ingredient for u in second.unmatched] == ["quinoa"]
 
 
-def test_cache_is_rematched_on_a_new_week():
-    conn = _cache()
+def test_cache_is_rematched_on_a_new_week(conn):
     recipes = [_recipe("broccoli")]
     offers = [_offer("rema", "Broccoli", 8)]
     matcher = FakeMatcher({"broccoli": 0})

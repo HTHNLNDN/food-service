@@ -10,9 +10,11 @@ import re
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 import httpx
+import psycopg
 
 from app import telemetry
 from app.llm import chat_completion
@@ -121,13 +123,34 @@ STAPLE_ALIASES: dict[str, int] = {
 }
 
 
+class _LazyUsdaStore:
+    """The local USDA store (scripts/build_nutrition_db.py), opened read-only on first query.
+
+    Lazy because services are built for every request that needs any of them (shopping, UI
+    translation) — only an actual food lookup should need the file. A missing file then fails
+    at that lookup instead of silently creating an empty store."""
+
+    def __init__(self, path: Path):
+        self._path = Path(path)
+        self._conn: sqlite3.Connection | None = None
+
+    def execute(self, sql: str, params=()):
+        if self._conn is None:
+            self._conn = sqlite3.connect(f"{self._path.resolve().as_uri()}?mode=ro", uri=True)
+        return self._conn.execute(sql, params)
+
+
+def open_usda_store(path: Path) -> _LazyUsdaStore:
+    return _LazyUsdaStore(path)
+
+
 class LocalNutritionSource:
     """Resolve ingredient -> (fdc_id, macros) using the local store + a candidate picker."""
 
     def __init__(
         self,
-        store: sqlite3.Connection,
-        cache: sqlite3.Connection,
+        store: sqlite3.Connection | _LazyUsdaStore,  # read-only USDA store (open_usda_store)
+        cache: psycopg.Connection,  # app DB: resolve_cache
         picker: CandidatePicker,
         candidate_limit: int = 20,
         aliases: dict[str, int] | None = None,
@@ -209,12 +232,13 @@ class LocalNutritionSource:
         return (fdc_id, Macros(row[0], row[1], row[2], row[3], row[4]))
 
     def _cached_fdc_id(self, key: str):
-        row = self.cache.execute("SELECT fdc_id FROM resolve_cache WHERE name = ?", (key,)).fetchone()
+        row = self.cache.execute("SELECT fdc_id FROM resolve_cache WHERE name = %s", (key,)).fetchone()
         return _MISS if row is None else row["fdc_id"]
 
     def _remember(self, key: str, fdc_id: int | None) -> None:
-        self.cache.execute("INSERT OR REPLACE INTO resolve_cache(name, fdc_id) VALUES (?, ?)", (key, fdc_id))
-        self.cache.commit()
+        self.cache.execute(
+            "INSERT INTO resolve_cache(name, fdc_id) VALUES (%s, %s) "
+            "ON CONFLICT (name) DO UPDATE SET fdc_id = excluded.fdc_id", (key, fdc_id))
 
 
 class LLMCandidatePicker:

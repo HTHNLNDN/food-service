@@ -77,8 +77,7 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def live_server(tmp_path, monkeypatch):
-    monkeypatch.setenv("FOOD_SERVICE_DATA_DIR", str(tmp_path))
+def live_server(db):
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)

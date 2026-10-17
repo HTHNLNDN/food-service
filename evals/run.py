@@ -1,6 +1,7 @@
 """Offline eval: run the real pipeline against golden scenarios, score deterministically, and
-report cost + quality. Results persist to <data_dir>/evals.db (eval_runs/eval_scores) so runs
-compare over time.
+report cost + quality. Samples run in a scratch database next to DATABASE_URL's
+(`<db>_eval_scratch`, emptied before each sample); results persist to DATABASE_URL's
+eval_runs/eval_scores so runs compare over time.
 
     uv run python evals/run.py                     # all scenarios, 1 sample each
     uv run python evals/run.py --samples 3         # 3 samples/scenario (mean reported)
@@ -12,18 +13,21 @@ Makes REAL LLM calls (~$0.01 + ~45s per run). A full sweep is ~$0.12 (or ~$0.36 
 import argparse
 import os
 import sys
-import tempfile
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from alembic import command
+from alembic.config import Config
 
 from app import telemetry
 from app.agent import GeminiGroundedAgent, OpenAICompatibleAgent
 from app.config import load_config
-from app.db import bootstrap, connect
-from app.nutrition import LLMCandidatePicker, LocalNutritionSource
+from app.db import APP_TABLES, connect, make_pool
+from app.nutrition import LLMCandidatePicker, LocalNutritionSource, open_usda_store
 from app.offers import Offer
 from app.planner import generate_plan
 from app.profile import Preferences, save_preferences
@@ -53,40 +57,72 @@ class FixedOffers:
         return [o for o in self._offers if o.chain_slug in allowed]
 
 
+def _scratch_url(url: str) -> str:
+    """`<db>_eval_scratch` on the same server, created and migrated on first use. Samples run
+    there, so an eval can never touch the app's real data."""
+    parts = urlsplit(url)
+    name = f"{parts.path.lstrip('/')}_eval_scratch"
+    with connect(url) as c:
+        if c.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone() is None:
+            c.execute(f'CREATE DATABASE "{name}"')  # name derives from DATABASE_URL, not input
+    scratch = parts._replace(path=f"/{name}").geturl()
+    cfg = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", scratch)
+    command.upgrade(cfg, "head")
+    return scratch
+
+
+def _reset(conn):
+    """Empty every app table except model_prices (seeded prices + candidates' prices stay)."""
+    conn.execute(f"TRUNCATE {', '.join(t for t in APP_TABLES if t != 'model_prices')} "
+                 "RESTART IDENTITY CASCADE")
+
+
 def _seed_history(conn, titles):
     if not titles:
         return
-    cur = conn.execute("INSERT INTO plans (created_at, week, use_up) VALUES (?, '2026-W01', '')",
-                       (datetime.now(UTC).isoformat(),))
-    pid = cur.lastrowid
-    for slot, title in enumerate(titles):
-        conn.execute("INSERT INTO recipes (plan_id, slot_index, title, servings, steps) "
-                     "VALUES (?, ?, ?, 2, '[]')", (pid, slot, title))
-    conn.commit()
+    with conn.transaction():
+        pid = conn.execute("INSERT INTO plans (created_at, week, use_up) "
+                           "VALUES (%s, '2026-W01', '') RETURNING id",
+                           (datetime.now(UTC),)).fetchone()["id"]
+        for slot, title in enumerate(titles):
+            conn.execute("INSERT INTO recipes (plan_id, slot_index, title, servings, steps) "
+                         "VALUES (%s, %s, %s, 2, '[]')", (pid, slot, title))
 
 
 def run_scenario(config, scn, samples, build=build_services, judge=None):
     """Return a list of per-sample metric dicts (one real plan each)."""
     out = []
-    for _ in range(samples):
-        db = Path(tempfile.mkdtemp()) / "eval.db"
-        conn = connect(db)
-        bootstrap(conn)
+    scratch = _scratch_url(config.database_url)
+    pool = make_pool(scratch)
+    pool.open(wait=True)
+    telemetry.configure(pool)  # cost for these samples lands in the scratch db
+    try:
+        for _ in range(samples):
+            out.append(_run_sample(config, scn, scratch, build, judge))
+    finally:
+        telemetry.configure(None)
+        pool.close()
+    return out
+
+
+def _run_sample(config, scn, scratch, build, judge):
+    with connect(scratch) as conn:
+        _reset(conn)
         save_preferences(conn, Preferences(scn.max_kcal, scn.min_protein_g, scn.restrictions,
                                            scn.servings, list(scn.stores), list(scn.bans)))
         _seed_history(conn, scn.seed_history)
-        telemetry.configure(db)  # cost for this run lands in the scratch db
         services = build(config, conn)
         plan = generate_plan(conn, agent=services.agent, offers=FixedOffers(scn.offers),
                              nutrition=services.nutrition, num_dinners=scn.num_dinners,
                              use_up=scn.use_up)
         r = plan.recipes
-        usd = conn.execute("SELECT COALESCE(SUM(usd),0) u FROM v_llm_cost WHERE plan_id=?",
+        usd = conn.execute("SELECT COALESCE(SUM(usd),0) u FROM v_llm_cost WHERE plan_id=%s",
                            (plan.id,)).fetchone()["u"]
-        revises = conn.execute("SELECT COUNT(*) n FROM llm_calls WHERE plan_id=? AND call_type='replace'",
+        revises = conn.execute("SELECT COUNT(*) n FROM llm_calls WHERE plan_id=%s AND call_type='replace'",
                                (plan.id,)).fetchone()["n"]
         gen_ms = conn.execute("SELECT COALESCE(SUM(latency_ms),0) ms FROM llm_calls "
-                              "WHERE plan_id=? AND call_type='plan_week'", (plan.id,)).fetchone()["ms"]
+                              "WHERE plan_id=%s AND call_type='plan_week'", (plan.id,)).fetchone()["ms"]
         dinners = len(r) or 1
         total_usd = conn.execute("SELECT COALESCE(SUM(usd),0) u FROM v_llm_cost").fetchone()["u"]
         sample = {
@@ -106,8 +142,7 @@ def run_scenario(config, scn, samples, build=build_services, judge=None):
             for axis in AXES:
                 vals = [s[axis] for s in judged if s.get(axis) is not None]
                 sample[axis] = sum(vals) / len(vals) if vals else 0.0
-        out.append(sample)
-    return out
+    return sample
 
 
 def _mean(rows, key):
@@ -118,17 +153,19 @@ def _build_for(cand):
     """A build(config, conn) that runs the WHOLE pipeline on one candidate model, and seeds its
     price so v_llm_cost reports that model's $ (mirrors app.services wiring)."""
     def build(config, conn):
-        conn.execute("INSERT OR REPLACE INTO model_prices (model, input_per_mtok, output_per_mtok, "
-                     "search_per_ktok) VALUES (?, ?, ?, ?)",
+        conn.execute("INSERT INTO model_prices (model, input_per_mtok, output_per_mtok, "
+                     "search_per_ktok) VALUES (%s, %s, %s, %s) ON CONFLICT (model) DO UPDATE SET "
+                     "input_per_mtok = excluded.input_per_mtok, "
+                     "output_per_mtok = excluded.output_per_mtok, "
+                     "search_per_ktok = excluded.search_per_ktok",
                      (cand.model, cand.input_per_mtok, cand.output_per_mtok, cand.search_per_ktok))
-        conn.commit()
         if cand.grounded:
             native = cand.base_url.rsplit("/openai", 1)[0]  # .../v1beta/openai -> .../v1beta
             agent = GeminiGroundedAgent(native, cand.model, cand.api_key)
         else:
             agent = OpenAICompatibleAgent(cand.base_url, cand.model, cand.api_key)
         picker = LLMCandidatePicker(cand.base_url, cand.model, cand.api_key)
-        nutrition = LocalNutritionSource(connect(config.usda_db_path), conn, picker)
+        nutrition = LocalNutritionSource(open_usda_store(config.usda_db_path), conn, picker)
         return Services(agent, None, nutrition, None)
     return build
 
@@ -169,17 +206,14 @@ def _run_compare(config, scenarios, args, judge, metrics):
 
 
 def _persist(config, model, samples, scorecard):
-    results_db = config.db_path.parent / "evals.db"
-    conn = connect(results_db)
-    bootstrap(conn)
-    run_id = conn.execute("INSERT INTO eval_runs (ts, model, samples) VALUES (?, ?, ?)",
-                          (datetime.now(UTC).isoformat(), model, samples)).lastrowid
-    conn.executemany(
-        "INSERT INTO eval_scores (run_id, scenario, metric, value) VALUES (?, ?, ?, ?)",
-        [(run_id, scn, m, v) for scn, means in scorecard.items() for m, v in means.items()],
-    )
-    conn.commit()
-    return run_id, results_db
+    with connect(config.database_url) as conn, conn.transaction():
+        run_id = conn.execute("INSERT INTO eval_runs (ts, model, samples) VALUES (%s, %s, %s) "
+                              "RETURNING id", (datetime.now(UTC), model, samples)).fetchone()["id"]
+        conn.cursor().executemany(
+            "INSERT INTO eval_scores (run_id, scenario, metric, value) VALUES (%s, %s, %s, %s)",
+            [(run_id, scn, m, v) for scn, means in scorecard.items() for m, v in means.items()],
+        )
+    return run_id
 
 
 def _build_judge(config):
@@ -228,8 +262,8 @@ def main() -> None:
         cells = "".join(f"{means[m]:>12.3f}" for m in metrics)
         print(f"{scn.name:18}{cells}")
 
-    run_id, results_db = _persist(config, config.llm_model, args.samples, scorecard)
-    print(f"\nSaved run #{run_id} to {results_db}")
+    run_id = _persist(config, config.llm_model, args.samples, scorecard)
+    print(f"\nSaved run #{run_id} to eval_runs/eval_scores (DATABASE_URL)")
     bans_broken = [s for s, m in scorecard.items() if m["ban_violations"] > 0]
     if bans_broken:
         print(f"⚠ BAN VIOLATIONS in: {', '.join(bans_broken)}  (must be 0)")
