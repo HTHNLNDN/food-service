@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.0  # publishes exact tags only, no moving v10
         with:
           python-version: "3.14"  # same as the Dockerfile
           enable-cache: true
