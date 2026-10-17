@@ -185,9 +185,8 @@ button.ghost:hover { border-color: var(--accent-strong); filter: none; }
 @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .planning .spinner, .card.declining .card-busy { animation: none; } }
 .downloads { line-height: 2; }
-/* Sizes below are literal px, measured against real A5 content-box dimensions (see
-   docs/superpowers/specs/2026-09-19-a5-recipe-print-design.md) — intentionally decoupled from
-   the --text-* tokens above, which were sized for on-screen UI and never validated for A5.
+/* Sizes below are literal px, measured against real A5 content-box dimensions — intentionally
+   decoupled from the --text-* tokens above, which were sized for on-screen UI and never validated for A5.
    Do not tokenize without re-measuring; a size bump here can silently break page fit. */
 .print-recipe {
   max-width: 640px;
