@@ -1,0 +1,25 @@
+# Only pyproject.toml, uv.lock and app/ are needed in the build context.
+.git/
+.github/
+.venv/
+.worktrees/
+.superpowers/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/
+**/*.pyc
+
+# Secrets and local state — never bake into the image.
+.env
+data/
+usda/
+
+docs/
+evals/
+scripts/
+tasks/
+tests/
+*.md
+LICENSE
+Dockerfile
+.dockerignore
