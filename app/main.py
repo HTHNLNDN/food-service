@@ -1,13 +1,15 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import psycopg
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app import i18n, telemetry
 from app.config import load_config
-from app.db import bootstrap, connect
+from app.db import make_pool
 from app.profile import load_preferences
 from app.profile import router as profile_router
 from app.services import build_services
@@ -19,11 +21,8 @@ BASE_DIR = Path(__file__).resolve().parent
 def _i18n_context(request: Request) -> dict:
     """Injects `t(english) -> translated`, backed by the ui_translations cache (app/i18n.py).
     Falls back to English for any string not yet cached — never blocks a page render."""
-    conn = connect(request.app.state.config.db_path)
-    try:
+    with request.app.state.pool.connection() as conn:
         strings = i18n.cached(conn, load_preferences(conn).language)
-    finally:
-        conn.close()
     return {"t": lambda s: strings.get(s, s)}
 
 
@@ -38,15 +37,26 @@ async def lifespan(app: FastAPI):
     app.state.config = config
     app.state.templates = templates
     app.state.build_services = build_services  # tests override this with fakes
-    conn = connect(config.db_path)
-    bootstrap(conn)
-    conn.close()
-    telemetry.configure(config.db_path)  # record LLM token/grounding spend to llm_calls
-    yield
-    telemetry.configure(None)
+    # Schema is NOT created here: `alembic upgrade head` runs before the app starts (Dockerfile).
+    pool = make_pool(config.database_url)
+    pool.open(wait=True, timeout=10)  # fail startup (and let the container restart) if DB is down
+    app.state.pool = pool
+    telemetry.configure(pool)  # record LLM token/grounding spend to llm_calls
+    try:
+        yield
+    finally:
+        telemetry.configure(None)
+        pool.close()
 
 
 app = FastAPI(title="food-service", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.include_router(ui_router)
 app.include_router(profile_router)
+
+
+@app.exception_handler(psycopg.OperationalError)  # also PoolTimeout: DB down or unreachable
+def _database_unavailable(request: Request, exc: psycopg.OperationalError):
+    return HTMLResponse(
+        "<h1>Database unavailable</h1><p>Try again in a moment.</p>", status_code=503
+    )

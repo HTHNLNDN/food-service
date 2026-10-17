@@ -14,10 +14,10 @@ from app.db import connect
 
 
 def main() -> None:
-    conn = connect(load_config().db_path)
+    conn = connect(load_config().database_url)
     rows = conn.execute(
         "SELECT name, hits, caused_revise, sample_grams, last_seen FROM missing_ingredients "
-        "ORDER BY caused_revise DESC, hits DESC"
+        "ORDER BY caused_revise DESC, hits DESC, name"
     ).fetchall()
     if not rows:
         print("No unresolved ingredients logged yet.")

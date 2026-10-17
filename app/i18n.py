@@ -5,7 +5,7 @@ batch-translated in one call and cached in `ui_translations`. Any string not yet
 translator that fails, just falls back to English — this must never block a page render.
 """
 
-import sqlite3
+import psycopg
 
 UI_STRINGS: list[str] = [
     # nav / page titles (base.html) — shared with each page's `title` context value
@@ -34,19 +34,19 @@ UI_STRINGS: list[str] = [
 ]
 
 
-def cached(conn: sqlite3.Connection, language: str) -> dict[str, str]:
+def cached(conn: psycopg.Connection, language: str) -> dict[str, str]:
     """text -> translation already cached for `language` ({} for English / no language set)."""
     if not language:
         return {}
     return {
         row["text"]: row["value"]
         for row in conn.execute(
-            "SELECT text, value FROM ui_translations WHERE language = ?", (language,)
+            "SELECT text, value FROM ui_translations WHERE language = %s", (language,)
         )
     }
 
 
-def warm(conn: sqlite3.Connection, language: str, translator) -> None:
+def warm(conn: psycopg.Connection, language: str, translator) -> None:
     """Batch-translate any UI_STRINGS not yet cached for `language`. Best-effort: no language, no
     translator, a malformed reply, or any exception all leave the cache untouched — callers keep
     seeing English for whatever isn't cached, nothing breaks."""
@@ -61,8 +61,9 @@ def warm(conn: sqlite3.Connection, language: str, translator) -> None:
         return
     if translated is None or len(translated) != len(missing):
         return
-    conn.executemany(
-        "INSERT OR REPLACE INTO ui_translations (language, text, value) VALUES (?, ?, ?)",
-        list(zip([language] * len(missing), missing, translated, strict=True)),
-    )
-    conn.commit()
+    with conn.transaction():  # the whole batch, or none of it
+        conn.cursor().executemany(
+            "INSERT INTO ui_translations (language, text, value) VALUES (%s, %s, %s) "
+            "ON CONFLICT (language, text) DO UPDATE SET value = excluded.value",
+            list(zip([language] * len(missing), missing, translated, strict=True)),
+        )

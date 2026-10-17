@@ -14,12 +14,12 @@ from app.db import connect
 
 
 def main() -> None:
-    conn = connect(load_config().db_path)
+    conn = connect(load_config().database_url)
     rows = conn.execute(
         "SELECT call_type, model, COUNT(*) n, COALESCE(SUM(input_tokens),0) in_tok, "
         "COALESCE(SUM(output_tokens),0) out_tok, COALESCE(SUM(search_queries),0) sq, "
         "SUM(usd) usd, COALESCE(SUM(retries),0) retries, "
-        "SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END) errs, AVG(latency_ms) ms "
+        "SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END) errs, AVG(latency_ms)::float ms "
         "FROM v_llm_cost GROUP BY call_type, model ORDER BY usd DESC"
     ).fetchall()
     if not rows:

@@ -1,7 +1,6 @@
 from decimal import Decimal
 
 from app.agent import Recipe
-from app.db import bootstrap, connect
 from app.nutrition import Ingredient, Macros
 from app.offers import Offer
 from app.planner import decline, generate_plan, load_plan
@@ -46,9 +45,7 @@ def _recipe(title, *ings):
     return Recipe(title, 4, [Ingredient(n, 400) for n in ings], ["cook"])
 
 
-def _conn(tmp_path):
-    conn = connect(tmp_path / "d.db")
-    bootstrap(conn)
+def _conn(conn):
     save_preferences(conn, Preferences(600, 15, "", 2, ["rema"]))
     return conn
 
@@ -57,8 +54,8 @@ def _plan(conn, agent):
     return generate_plan(conn, agent=agent, offers=FakeOffers(), nutrition=FakeNutrition(), num_dinners=2)
 
 
-def test_decline_replaces_dish_and_persists(tmp_path):
-    conn = _conn(tmp_path)
+def test_decline_replaces_dish_and_persists(conn):
+    conn = _conn(conn)
     agent = FakeAgent([_recipe("A", "unicorn"), _recipe("B", "beef")], _recipe("C", "chicken"))
     plan = _plan(conn, agent)
 
@@ -69,8 +66,8 @@ def test_decline_replaces_dish_and_persists(tmp_path):
     assert [r.title for r in load_plan(conn, plan.id).recipes] == ["C", "B"]
 
 
-def test_declined_unique_ingredient_removed_from_shopping(tmp_path):
-    conn = _conn(tmp_path)
+def test_declined_unique_ingredient_removed_from_shopping(conn):
+    conn = _conn(conn)
     agent = FakeAgent([_recipe("A", "unicorn"), _recipe("B", "beef")], _recipe("C", "chicken"))
     plan = _plan(conn, agent)
     updated = decline(conn, plan.id, 0, agent=agent, offers=FakeOffers(), nutrition=FakeNutrition())

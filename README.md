@@ -30,7 +30,8 @@ n-amount of people, grounded in current Danish grocery offers, with **determinis
 | `shopping` | `app/shopping.py` | cheapest-match shopping list among selected stores |
 | `ui` | `app/ui.py` + `templates/` | soft/light web UI, print view |
 
-`app/db.py` holds the single SQLite schema.
+App state lives in **PostgreSQL**: `app/db.py` provides the connection pool, and the schema lives in
+Alembic migrations under `migrations/`.
 
 ## Setup
 
@@ -41,6 +42,22 @@ uv sync
 cp .env.example .env      # then fill in the keys (see below)
 ```
 
+### Database (local Postgres)
+
+The app needs a PostgreSQL 18 database at `DATABASE_URL`. For local development:
+
+```bash
+docker run -d --name food-service-dev-db -p 127.0.0.1:5432:5432 \
+  -e POSTGRES_USER=food -e POSTGRES_PASSWORD=food -e POSTGRES_DB=food_service \
+  -v food-service-dev-pgdata:/var/lib/postgresql postgres:18
+# .env: DATABASE_URL=postgresql://food:food@127.0.0.1:5432/food_service
+uv run alembic upgrade head   # create/upgrade the schema (run after every pull)
+```
+
+New schema change? Add a migration under `migrations/versions/` (hand-written SQL via
+`op.execute`). It must keep the previous app version working: expand now, contract in a
+later release (see DEPLOY.md).
+
 ### Nutrition store (local, offline)
 
 Nutrition macros come from a **local USDA store**, not an API. Download the **Foundation**
@@ -48,6 +65,7 @@ and **SR Legacy** CSV zips from https://fdc.nal.usda.gov/download-datasets into 
 
 ```bash
 PYTHONPATH=. uv run python scripts/build_nutrition_db.py   # builds data/usda.db (~8k foods)
+# the app reads it from USDA_DB_PATH (default data/usda.db), read-only
 ```
 
 Ingredient→food resolution uses FTS5 + an LLM that picks *which* food (the macro numbers
@@ -73,6 +91,7 @@ uv run uvicorn app.main:app --reload
 
 ```bash
 uv run pytest          # tests (deterministic slices tested hard; agent/offers mocked)
+                       # DB tests start a throwaway postgres:18-alpine: needs Docker running
 uv run ruff check .    # lint
 uv run ruff format .   # format
 ```
@@ -92,7 +111,7 @@ uv run pytest tests/test_e2e_ui.py
 - **Offers are Danish free-text** (no product IDs), so ingredient→offer matching is
   best-effort; unmatched items are listed at unknown price. Offer *biasing* happens at the
   recipe level. This also means that if a name brand dtable in onoffer, that will be shown, which is likely more expensive than the dkscount counterpart.
-- **KISS:** SQLite (not a vector DB), plain form POSTs (not HTMX), one adapter for all
+- **KISS:** plain Postgres tables (not a vector DB), plain form POSTs (not HTMX), one adapter for all
   providers.
 
 ## License

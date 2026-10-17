@@ -4,13 +4,13 @@ Kept in one place so routes stay thin and tests can inject fakes via
 `app.state.build_services`.
 """
 
-import sqlite3
 from dataclasses import dataclass
+
+import psycopg
 
 from app.agent import GeminiGroundedAgent, MealPlanAgent, OpenAICompatibleAgent
 from app.config import Config
-from app.db import connect
-from app.nutrition import LLMCandidatePicker, LocalNutritionSource, NutritionSource
+from app.nutrition import LLMCandidatePicker, LocalNutritionSource, NutritionSource, open_usda_store
 from app.offers import OffersProvider, ShelfAtlasOffersProvider
 from app.shopping import LLMOfferMatcher, OfferMatcher
 from app.translate import LLMTranslator, Translator
@@ -42,7 +42,7 @@ def _build_translator(config: Config) -> Translator:
     return LLMTranslator(base, model, key)
 
 
-def build_services(config: Config, conn: sqlite3.Connection) -> Services:
+def build_services(config: Config, conn: psycopg.Connection) -> Services:
     # Picker uses the OpenAI-compatible endpoint (food selection needs no grounding).
     picker = LLMCandidatePicker(config.llm_base_url, config.llm_model, config.llm_api_key or "")
     key = config.llm_api_key or ""
@@ -50,7 +50,7 @@ def build_services(config: Config, conn: sqlite3.Connection) -> Services:
         agent=_build_agent(config),
         offers=ShelfAtlasOffersProvider(conn, config.shelfatlas_api_key or ""),
         # numbers come from the local USDA store; the picker only chooses which food, cached in `conn`
-        nutrition=LocalNutritionSource(connect(config.usda_db_path), conn, picker),
+        nutrition=LocalNutritionSource(open_usda_store(config.usda_db_path), conn, picker),
         # offer matcher picks which Danish offer fits an English ingredient (never a price)
         offer_matcher=LLMOfferMatcher(config.llm_base_url, config.llm_model, key),
         translator=_build_translator(config),

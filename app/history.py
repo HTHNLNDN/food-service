@@ -16,8 +16,9 @@ similar (Jaccard) to a cooled-down dish — which catches reworded near-duplicat
 """
 
 import re
-import sqlite3
 from dataclasses import dataclass
+
+import psycopg
 
 from app.nutrition import Ingredient
 
@@ -76,20 +77,20 @@ def is_repeat(title: str, ingredients: list[Ingredient], past: list[PastDish],
     return False
 
 
-def _title_net_scores(conn: sqlite3.Connection) -> dict[str, int]:
+def _title_net_scores(conn: psycopg.Connection) -> dict[str, int]:
     net: dict[str, int] = {}
-    for row in conn.execute("SELECT title, score FROM ratings"):
+    for row in conn.execute("SELECT title, score FROM ratings ORDER BY id"):
         nt = _norm_title(row["title"])
         net[nt] = net.get(nt, 0) + row["score"]
     return net
 
 
-def _load_ingredients(conn: sqlite3.Connection, recipe_id: int) -> list[str]:
+def _load_ingredients(conn: psycopg.Connection, recipe_id: int) -> list[str]:
     return [r["name"] for r in conn.execute(
-        "SELECT name FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,))]
+        "SELECT name FROM recipe_ingredients WHERE recipe_id = %s", (recipe_id,))]
 
 
-def recent_avoided(conn: sqlite3.Connection, *, window: int = RECENT_PLANS) -> list[PastDish]:
+def recent_avoided(conn: psycopg.Connection, *, window: int = RECENT_PLANS) -> list[PastDish]:
     """Dishes to keep off the next plan: recent (non-liked) dinners + all disliked dinners.
 
     Liked dishes are excluded entirely so they can come back. De-duplicated by title (a dish
@@ -108,17 +109,16 @@ def recent_avoided(conn: sqlite3.Connection, *, window: int = RECENT_PLANS) -> l
         dishes[nt] = PastDish(title, nt, merged)
 
     recent_ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM plans ORDER BY id DESC LIMIT ?", (window,))]
+        "SELECT id FROM plans ORDER BY id DESC LIMIT %s", (window,))]
     if recent_ids:
-        placeholders = ",".join("?" * len(recent_ids))
         for r in conn.execute(
-            f"SELECT id, title FROM recipes WHERE plan_id IN ({placeholders})", recent_ids
+            "SELECT id, title FROM recipes WHERE plan_id = ANY(%s) ORDER BY id", (recent_ids,)
         ):
             if _norm_title(r["title"]) not in liked:  # neutral or disliked; liked can return
                 add(r["id"], r["title"])
 
     if disliked:  # disliked dishes stay avoided forever, not just within the window
-        for r in conn.execute("SELECT id, title FROM recipes"):
+        for r in conn.execute("SELECT id, title FROM recipes ORDER BY id"):
             if _norm_title(r["title"]) in disliked:
                 add(r["id"], r["title"])
 

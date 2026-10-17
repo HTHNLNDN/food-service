@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.db import bootstrap, connect
+from app.db import connect
 from app.main import app
 from app.nutrition import Ingredient, Macros
 from app.planner import PlannedRecipe, _persist
@@ -14,9 +14,7 @@ def _seed(conn):
     save_rating(conn, "Chicken bowl", 1, ["chicken"])
 
 
-def test_export_all_contains_profile_plans_and_ratings(tmp_path):
-    conn = connect(tmp_path / "e.db")
-    bootstrap(conn)
+def test_export_all_contains_profile_plans_and_ratings(conn):
     _seed(conn)
     data = export_all(conn)
     assert data["preferences"]["max_kcal"] == 600
@@ -26,9 +24,7 @@ def test_export_all_contains_profile_plans_and_ratings(tmp_path):
     assert data["ratings"][0]["title"] == "Chicken bowl"
 
 
-def test_export_includes_translated_fields_when_present(tmp_path):
-    conn = connect(tmp_path / "e.db")
-    bootstrap(conn)
+def test_export_includes_translated_fields_when_present(conn):
     save_preferences(conn, Preferences(600, 40, "PCOS", 2, ["rema"], language="Danish"))
     _persist(conn, [PlannedRecipe(
         "Chicken bowl", 4, [Ingredient("chicken", 400)], ["Grill it"],
@@ -43,9 +39,7 @@ def test_export_includes_translated_fields_when_present(tmp_path):
     assert recipe["ingredients"][0]["name_translated"] == "kylling"
 
 
-def test_export_translated_fields_are_null_when_no_language_configured(tmp_path):
-    conn = connect(tmp_path / "e.db")
-    bootstrap(conn)
+def test_export_translated_fields_are_null_when_no_language_configured(conn):
     _seed(conn)
     data = export_all(conn)
     recipe = data["plans"][0]["recipes"][0]
@@ -54,9 +48,9 @@ def test_export_translated_fields_are_null_when_no_language_configured(tmp_path)
     assert recipe["ingredients"][0]["name_translated"] is None
 
 
-def test_full_json_export_endpoint():
+def test_full_json_export_endpoint(db):
     with TestClient(app) as client:
-        _seed(connect(client.app.state.config.db_path))
+        _seed(connect(db))
         resp = client.get("/me/all.json")
     assert resp.status_code == 200
     body = resp.json()
@@ -64,9 +58,9 @@ def test_full_json_export_endpoint():
     assert body["ratings"][0]["title"] == "Chicken bowl"
 
 
-def test_ratings_csv_endpoint():
+def test_ratings_csv_endpoint(db):
     with TestClient(app) as client:
-        _seed(connect(client.app.state.config.db_path))
+        _seed(connect(db))
         resp = client.get("/me/ratings.csv")
     assert resp.status_code == 200
     assert "text/csv" in resp.headers["content-type"]
@@ -74,25 +68,28 @@ def test_ratings_csv_endpoint():
     assert resp.text.splitlines()[0].startswith("created_at")
 
 
-def test_database_file_download():
+def test_raw_database_download_is_gone(db):
+    """Postgres has no file to hand out, and with several users it would leak everyone's data;
+    the JSON/CSV exports above cover taking your data with you."""
     with TestClient(app) as client:
         resp = client.get("/me/database.db")
-    assert resp.status_code == 200
-    assert resp.headers["content-type"] == "application/octet-stream"
+        me = client.get("/me").text
+    assert resp.status_code == 404
+    assert "/me/database.db" not in me
 
 
-def test_print_page_lists_recipes_with_steps():
+def test_print_page_lists_recipes_with_steps(db):
     with TestClient(app) as client:
-        _seed(connect(client.app.state.config.db_path))
+        _seed(connect(db))
         resp = client.get("/print")
     assert resp.status_code == 200
     assert "Chicken bowl" in resp.text
     assert "Grill it" in resp.text
 
 
-def test_print_recipe_gets_compact_class_when_long():
+def test_print_recipe_gets_compact_class_when_long(db):
     with TestClient(app) as client:
-        conn = connect(client.app.state.config.db_path)
+        conn = connect(db)
         save_preferences(conn, Preferences(600, 40, "PCOS", 2, ["rema"]))
         long_ingredients = [Ingredient(f"ingredient {i}", 10) for i in range(14)]
         long_steps = [f"Step {i} of the recipe." for i in range(10)]
@@ -103,9 +100,9 @@ def test_print_recipe_gets_compact_class_when_long():
     assert 'class="print-recipe compact"' in resp.text
 
 
-def test_print_recipe_stays_normal_class_when_short():
+def test_print_recipe_stays_normal_class_when_short(db):
     with TestClient(app) as client:
-        _seed(connect(client.app.state.config.db_path))
+        _seed(connect(db))
         resp = client.get("/print")
     assert resp.status_code == 200
     assert 'class="print-recipe compact"' not in resp.text

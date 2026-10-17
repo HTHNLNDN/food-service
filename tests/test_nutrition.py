@@ -3,7 +3,6 @@ import sqlite3
 import httpx
 import pytest
 
-from app.db import bootstrap, connect
 from app.nutrition import (
     Candidate,
     Ingredient,
@@ -79,59 +78,53 @@ def _store():
     return s
 
 
-def _cache(tmp_path):
-    c = connect(tmp_path / "c.db")
-    bootstrap(c)
-    return c
-
-
-def test_local_lookup_returns_macros_of_picked_food(tmp_path):
-    src = LocalNutritionSource(_store(), _cache(tmp_path), FakePicker(2))
+def test_local_lookup_returns_macros_of_picked_food(conn):
+    src = LocalNutritionSource(_store(), conn, FakePicker(2))
     found = src.lookup("salmon")
     assert found is not None and found[0] == 2
     assert found[1].protein_g == 20 and found[1].kcal == 180  # raw flesh, not the oil (fdc 1)
 
 
-def test_local_lookup_carries_fibre(tmp_path):
-    src = LocalNutritionSource(_store(), _cache(tmp_path), FakePicker(3))
+def test_local_lookup_carries_fibre(conn):
+    src = LocalNutritionSource(_store(), conn, FakePicker(3))
     _, macros = src.lookup("broccoli")
     assert macros.fibre_g == 2.6
 
 
-def test_local_lookup_none_when_no_candidates(tmp_path):
-    src = LocalNutritionSource(_store(), _cache(tmp_path), FakePicker(2))
+def test_local_lookup_none_when_no_candidates(conn):
+    src = LocalNutritionSource(_store(), conn, FakePicker(2))
     assert src.lookup("zzznotafood") is None
 
 
-def test_local_lookup_none_when_picker_declines(tmp_path):
-    src = LocalNutritionSource(_store(), _cache(tmp_path), FakePicker(None))
+def test_local_lookup_none_when_picker_declines(conn):
+    src = LocalNutritionSource(_store(), conn, FakePicker(None))
     assert src.lookup("salmon") is None
 
 
-def test_local_lookup_rejects_fdc_id_not_among_candidates(tmp_path):
-    src = LocalNutritionSource(_store(), _cache(tmp_path), FakePicker(999))
+def test_local_lookup_rejects_fdc_id_not_among_candidates(conn):
+    src = LocalNutritionSource(_store(), conn, FakePicker(999))
     assert src.lookup("salmon") is None
 
 
-def test_local_lookup_caches_and_skips_picker_on_repeat(tmp_path):
+def test_local_lookup_caches_and_skips_picker_on_repeat(conn):
     picker = FakePicker(2)
-    src = LocalNutritionSource(_store(), _cache(tmp_path), picker, aliases={})
+    src = LocalNutritionSource(_store(), conn, picker, aliases={})
     src.lookup("salmon")
     src.lookup("salmon")
     assert picker.calls == 1
 
 
-def test_curated_alias_pins_food_and_skips_picker(tmp_path):
+def test_curated_alias_pins_food_and_skips_picker(conn):
     picker = FakePicker(1)  # would wrongly pick the oil
-    src = LocalNutritionSource(_store(), _cache(tmp_path), picker, aliases={"salmon": 2})
+    src = LocalNutritionSource(_store(), conn, picker, aliases={"salmon": 2})
     found = src.lookup("salmon")
     assert found is not None and found[0] == 2  # the pinned raw flesh
     assert picker.calls == 0  # alias short-circuits the LLM
 
 
-def test_warm_prepopulates_cache_so_lookups_skip_the_picker(tmp_path):
+def test_warm_prepopulates_cache_so_lookups_skip_the_picker(conn):
     picker = FakePicker(2)
-    src = LocalNutritionSource(_store(), _cache(tmp_path), picker, aliases={})
+    src = LocalNutritionSource(_store(), conn, picker, aliases={})
     src.warm(["salmon", "broccoli", "salmon"])  # dedupes -> one pick per unique uncached name
     assert picker.calls == 2
     src.lookup("salmon")
@@ -139,9 +132,9 @@ def test_warm_prepopulates_cache_so_lookups_skip_the_picker(tmp_path):
     assert picker.calls == 2  # served from the warmed cache, no further picks
 
 
-def test_alias_with_unknown_fdc_falls_through_to_picker(tmp_path):
+def test_alias_with_unknown_fdc_falls_through_to_picker(conn):
     picker = FakePicker(3)
-    src = LocalNutritionSource(_store(), _cache(tmp_path), picker, aliases={"broccoli": 99999})
+    src = LocalNutritionSource(_store(), conn, picker, aliases={"broccoli": 99999})
     found = src.lookup("broccoli")
     assert found is not None and found[0] == 3  # 99999 not in store -> picker used
     assert picker.calls == 1

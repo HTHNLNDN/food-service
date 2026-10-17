@@ -1,11 +1,11 @@
 import json
-import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 
 import httpx
+import psycopg
 
 from app.dates import iso_week
 
@@ -54,7 +54,7 @@ def _parse_offer(raw: dict, chain_slug: str) -> Offer:
 class ShelfAtlasOffersProvider:
     """Fetches ShelfAtlas offers for whitelisted chains, cached per ISO week."""
 
-    def __init__(self, conn: sqlite3.Connection, api_key: str, client: httpx.Client | None = None):
+    def __init__(self, conn: psycopg.Connection, api_key: str, client: httpx.Client | None = None):
         self.conn = conn
         self._client = client or httpx.Client(
             base_url=SHELFATLAS_BASE, headers={"Authorization": f"Bearer {api_key}"}, timeout=30
@@ -74,7 +74,7 @@ class ShelfAtlasOffersProvider:
     def _raw_for_chain(self, slug: str, week: str, refresh: bool) -> list[dict]:
         if not refresh:
             row = self.conn.execute(
-                "SELECT payload FROM offers_cache WHERE chain_slug = ? AND week = ?", (slug, week)
+                "SELECT payload FROM offers_cache WHERE chain_slug = %s AND week = %s", (slug, week)
             ).fetchone()
             if row is not None:
                 return json.loads(row["payload"])
@@ -84,8 +84,8 @@ class ShelfAtlasOffersProvider:
         payload = resp.json()
         raw = payload.get("data", []) if isinstance(payload, dict) else payload
         self.conn.execute(
-            "INSERT OR REPLACE INTO offers_cache(chain_slug, week, payload) VALUES (?, ?, ?)",
+            "INSERT INTO offers_cache(chain_slug, week, payload) VALUES (%s, %s, %s) "
+            "ON CONFLICT (chain_slug, week) DO UPDATE SET payload = excluded.payload",
             (slug, week, json.dumps(raw)),
         )
-        self.conn.commit()
         return raw

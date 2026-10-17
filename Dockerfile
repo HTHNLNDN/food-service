@@ -26,15 +26,17 @@ RUN groupadd --gid 10001 app \
 WORKDIR /app
 
 COPY --from=build /app/.venv /app/.venv
+COPY alembic.ini ./
+COPY migrations/ ./migrations/
 COPY app/ ./app/
 
-# SQLite lives here (food_service.db is created on startup; usda.db must be supplied).
+# Read-only USDA nutrition store (usda.db) is mounted here; app state lives in Postgres.
 RUN mkdir -p /app/data && chown app:app /app/data
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    FOOD_SERVICE_DATA_DIR=/app/data
+    USDA_DB_PATH=/app/data/usda.db
 
 USER app
 
@@ -43,6 +45,6 @@ VOLUME ["/app/data"]
 # uvicorn's default port; the app has no port setting of its own.
 EXPOSE 8000
 
-# Single worker: SQLite + an in-process background planner thread.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--proxy-headers", "--forwarded-allow-ips", "*"]
+# Migrate first (transactional; a failure leaves the schema untouched and uvicorn never starts),
+# then serve. Single worker: in-process background planner thread + process-wide plan lock.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"]

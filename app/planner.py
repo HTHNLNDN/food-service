@@ -6,9 +6,10 @@ The agent is untrusted for numbers — every recipe's per-serving macros are rec
 """
 
 import json
-import sqlite3
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+
+import psycopg
 
 from app import telemetry
 from app.agent import MealPlanAgent, PlanContext, Recipe
@@ -88,22 +89,22 @@ def _per_serving(recipe: Recipe, source: NutritionSource) -> tuple[Macros, bool,
     return per, not material_gap, result.unresolved
 
 
-def _log_missing(conn: sqlite3.Connection, recipe: Recipe, unresolved: list[str]) -> None:
+def _log_missing(conn: psycopg.Connection, recipe: Recipe, unresolved: list[str]) -> None:
     """Record ingredients the food store couldn't resolve, for later batch-adding with real
     macros. Rolled up by name: total hits, how often it was big enough to force a revise."""
     missing = set(unresolved)
-    now = datetime.now(UTC).isoformat()
-    for ing in recipe.ingredients:
-        if ing.name in missing:
-            conn.execute(
-                "INSERT INTO missing_ingredients (name, hits, caused_revise, sample_grams, last_seen) "
-                "VALUES (?, 1, ?, ?, ?) "
-                "ON CONFLICT(name) DO UPDATE SET hits = hits + 1, "
-                "caused_revise = caused_revise + excluded.caused_revise, "
-                "sample_grams = excluded.sample_grams, last_seen = excluded.last_seen",
-                (ing.name.strip().lower(), int(ing.grams >= UNRESOLVED_GRAMS), ing.grams, now),
-            )
-    conn.commit()
+    now = datetime.now(UTC)
+    with conn.transaction():
+        for ing in recipe.ingredients:
+            if ing.name in missing:
+                conn.execute(
+                    "INSERT INTO missing_ingredients (name, hits, caused_revise, sample_grams, last_seen) "
+                    "VALUES (%s, 1, %s, %s, %s) "
+                    "ON CONFLICT(name) DO UPDATE SET hits = missing_ingredients.hits + 1, "
+                    "caused_revise = missing_ingredients.caused_revise + excluded.caused_revise, "
+                    "sample_grams = excluded.sample_grams, last_seen = excluded.last_seen",
+                    (ing.name.strip().lower(), int(ing.grams >= UNRESOLVED_GRAMS), ing.grams, now),
+                )
 
 
 def _within_targets(per: Macros, ctx: PlanContext) -> bool:
@@ -114,7 +115,7 @@ def _within_targets(per: Macros, ctx: PlanContext) -> bool:
 
 def _verify_or_revise(
     recipe: Recipe, ctx: PlanContext, agent: MealPlanAgent, source: NutritionSource,
-    past: list[PastDish] = (), conn: sqlite3.Connection | None = None,
+    past: list[PastDish] = (), conn: psycopg.Connection | None = None,
 ) -> PlannedRecipe:
     current = recipe
     for _ in range(MAX_REVISIONS + 1):
@@ -154,7 +155,7 @@ def _translate(planned: PlannedRecipe, language: str, translator: Translator) ->
 
 
 def _plan_context(
-    conn: sqlite3.Connection, offers: OffersProvider, num_dinners: int,
+    conn: psycopg.Connection, offers: OffersProvider, num_dinners: int,
     past: list[PastDish] = (), use_up: str = "",
 ) -> PlanContext:
     prefs = load_preferences(conn)
@@ -175,7 +176,7 @@ def _plan_context(
 
 
 def generate_plan(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     *,
     agent: MealPlanAgent,
     offers: OffersProvider,
@@ -200,7 +201,7 @@ def generate_plan(
 
 
 def decline(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     plan_id: int,
     slot_index: int,
     *,
@@ -238,63 +239,65 @@ def _to_recipe(planned: PlannedRecipe) -> Recipe:
     )
 
 
-def _persist(conn: sqlite3.Connection, recipes: list[PlannedRecipe], use_up: str = "") -> int:
-    cur = conn.execute(
-        "INSERT INTO plans (created_at, week, use_up) VALUES (?, ?, ?)",
-        (datetime.now(UTC).isoformat(), iso_week(datetime.now(UTC).date()), use_up),
-    )
-    plan_id = cur.lastrowid
-    _insert_recipes(conn, plan_id, recipes)
-    conn.commit()
+def _persist(conn: psycopg.Connection, recipes: list[PlannedRecipe], use_up: str = "") -> int:
+    with conn.transaction():  # a plan and all its dishes land together, or not at all
+        plan_id = conn.execute(
+            "INSERT INTO plans (created_at, week, use_up) VALUES (%s, %s, %s) RETURNING id",
+            (datetime.now(UTC), iso_week(datetime.now(UTC).date()), use_up),
+        ).fetchone()["id"]
+        _insert_recipes(conn, plan_id, recipes)
     return plan_id
 
 
-def _insert_recipes(conn: sqlite3.Connection, plan_id: int, recipes: list[PlannedRecipe]) -> None:
+def _insert_recipes(conn: psycopg.Connection, plan_id: int, recipes: list[PlannedRecipe]) -> None:
     for slot, r in enumerate(recipes):
-        rc = conn.execute(
+        recipe_id = conn.execute(
             """INSERT INTO recipes
                (plan_id, slot_index, title, title_translated, servings, steps, steps_translated,
                 per_serving_kcal, per_serving_protein_g, per_serving_carbs_g, per_serving_fat_g,
                 per_serving_fibre_g, flagged)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               RETURNING id""",
             (plan_id, slot, r.title, r.title_translated, r.servings, json.dumps(r.steps),
              json.dumps(r.steps_translated) if r.steps_translated is not None else None,
              r.per_serving.kcal, r.per_serving.protein_g, r.per_serving.carbs_g,
-             r.per_serving.fat_g, r.per_serving.fibre_g, int(r.flagged)),
-        )
+             r.per_serving.fat_g, r.per_serving.fibre_g, bool(r.flagged)),
+        ).fetchone()["id"]
         translations = r.ingredient_translations or {}
-        conn.executemany(
-            "INSERT INTO recipe_ingredients (recipe_id, name, name_translated, grams) VALUES (?, ?, ?, ?)",
-            [(rc.lastrowid, i.name, translations.get(i.name), i.grams) for i in r.ingredients],
+        conn.cursor().executemany(
+            "INSERT INTO recipe_ingredients (recipe_id, name, name_translated, grams) "
+            "VALUES (%s, %s, %s, %s)",
+            [(recipe_id, i.name, translations.get(i.name), i.grams) for i in r.ingredients],
         )
 
 
-def _rewrite_plan(conn: sqlite3.Connection, plan_id: int, recipes: list[PlannedRecipe]) -> None:
-    for row in conn.execute("SELECT id FROM recipes WHERE plan_id = ?", (plan_id,)).fetchall():
-        conn.execute("DELETE FROM recipe_ingredients WHERE recipe_id = ?", (row["id"],))
-    conn.execute("DELETE FROM recipes WHERE plan_id = ?", (plan_id,))
-    _insert_recipes(conn, plan_id, recipes)
-    conn.commit()
+def _rewrite_plan(conn: psycopg.Connection, plan_id: int, recipes: list[PlannedRecipe]) -> None:
+    with conn.transaction():  # never leave a plan with its dishes half-replaced
+        conn.execute(
+            "DELETE FROM recipe_ingredients WHERE recipe_id IN "
+            "(SELECT id FROM recipes WHERE plan_id = %s)", (plan_id,))
+        conn.execute("DELETE FROM recipes WHERE plan_id = %s", (plan_id,))
+        _insert_recipes(conn, plan_id, recipes)
 
 
-def load_latest_plan(conn: sqlite3.Connection) -> Plan | None:
+def load_latest_plan(conn: psycopg.Connection) -> Plan | None:
     row = conn.execute("SELECT id FROM plans ORDER BY id DESC LIMIT 1").fetchone()
     if row is None:
         return None
     return load_plan(conn, row["id"])
 
 
-def load_plan(conn: sqlite3.Connection, plan_id: int) -> Plan:
-    prow = conn.execute("SELECT use_up FROM plans WHERE id = ?", (plan_id,)).fetchone()
+def load_plan(conn: psycopg.Connection, plan_id: int) -> Plan:
+    prow = conn.execute("SELECT use_up FROM plans WHERE id = %s", (plan_id,)).fetchone()
     use_up = prow["use_up"] if prow is not None else ""
     recipes = []
     for r in conn.execute(
-        "SELECT * FROM recipes WHERE plan_id = ? ORDER BY slot_index", (plan_id,)
+        "SELECT * FROM recipes WHERE plan_id = %s ORDER BY slot_index", (plan_id,)
     ):
         ingredients = []
         translations = {}
         for i in conn.execute(
-            "SELECT name, name_translated, grams FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id",
+            "SELECT name, name_translated, grams FROM recipe_ingredients WHERE recipe_id = %s ORDER BY id",
             (r["id"],),
         ):
             ingredients.append(Ingredient(name=i["name"], grams=i["grams"]))

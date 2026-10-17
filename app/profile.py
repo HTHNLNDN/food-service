@@ -1,14 +1,13 @@
 import csv
 import io
 import json
-import sqlite3
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Annotated
 
+import psycopg
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import (
-    FileResponse,
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
@@ -59,12 +58,12 @@ class Preferences:
     language: str = ""  # display language for recipes/shopping; "" = English, no translation
 
 
-def selected_store_slugs(conn: sqlite3.Connection) -> list[str]:
+def selected_store_slugs(conn: psycopg.Connection) -> list[str]:
     """The user's store whitelist — the single source used by offers/shopping."""
     return [r["chain_slug"] for r in conn.execute("SELECT chain_slug FROM stores ORDER BY chain_slug")]
 
 
-def load_preferences(conn: sqlite3.Connection) -> Preferences:
+def load_preferences(conn: psycopg.Connection) -> Preferences:
     row = conn.execute(
         "SELECT max_kcal, min_protein_g, restrictions, servings, bans, language "
         "FROM preferences WHERE id = 1"
@@ -78,11 +77,16 @@ def load_preferences(conn: sqlite3.Connection) -> Preferences:
     )
 
 
-def save_preferences(conn: sqlite3.Connection, prefs: Preferences) -> None:
+def save_preferences(conn: psycopg.Connection, prefs: Preferences) -> None:
+    with conn.transaction():  # preferences + store whitelist change together or not at all
+        _save_preferences(conn, prefs)
+
+
+def _save_preferences(conn: psycopg.Connection, prefs: Preferences) -> None:
     conn.execute(
         """
         INSERT INTO preferences (id, max_kcal, min_protein_g, restrictions, servings, bans, language)
-        VALUES (1, ?, ?, ?, ?, ?, ?)
+        VALUES (1, %s, %s, %s, %s, %s, %s)
         ON CONFLICT(id) DO UPDATE SET
             max_kcal = excluded.max_kcal,
             min_protein_g = excluded.min_protein_g,
@@ -95,11 +99,10 @@ def save_preferences(conn: sqlite3.Connection, prefs: Preferences) -> None:
          json.dumps(prefs.bans), prefs.language),
     )
     conn.execute("DELETE FROM stores")
-    conn.executemany(
-        "INSERT INTO stores (chain_slug) VALUES (?)",
+    conn.cursor().executemany(
+        "INSERT INTO stores (chain_slug) VALUES (%s)",
         [(s,) for s in prefs.stores if s in _CHAIN_SLUGS],
     )
-    conn.commit()
 
 
 # --- ratings / preference learning (the "user view over time") ---
@@ -114,29 +117,28 @@ class Rating:
     created_at: str
 
 
-def save_rating(conn: sqlite3.Connection, title: str, score: int, tags: list[str]) -> None:
+def save_rating(conn: psycopg.Connection, title: str, score: int, tags: list[str]) -> None:
     conn.execute(
-        "INSERT INTO ratings (title, score, tags, created_at) VALUES (?, ?, ?, ?)",
-        (title, score, json.dumps(tags), datetime.now(UTC).isoformat()),
+        "INSERT INTO ratings (title, score, tags, created_at) VALUES (%s, %s, %s, %s)",
+        (title, score, json.dumps(tags), datetime.now(UTC)),
     )
-    conn.commit()
 
 
-def rating_history(conn: sqlite3.Connection) -> list[Rating]:
+def rating_history(conn: psycopg.Connection) -> list[Rating]:
     return [
-        Rating(r["id"], r["title"], r["score"], json.loads(r["tags"]), r["created_at"])
+        Rating(r["id"], r["title"], r["score"], json.loads(r["tags"]), r["created_at"].isoformat())
         for r in conn.execute("SELECT * FROM ratings ORDER BY id DESC")
     ]
 
 
-def preference_summary(conn: sqlite3.Connection) -> str:
+def preference_summary(conn: psycopg.Connection) -> str:
     """Aggregate ratings into a liked/avoid ingredient signal fed to the agent.
 
     Net score per ingredient tag across all ratings; no ML, no vector DB — just SQL-ish
     aggregation that generalizes preferences across weeks.
     """
     net: dict[str, int] = {}
-    for row in conn.execute("SELECT score, tags FROM ratings"):
+    for row in conn.execute("SELECT score, tags FROM ratings ORDER BY id"):
         for tag in json.loads(row["tags"]):
             net[tag] = net.get(tag, 0) + row["score"]
     liked = [t for t, s in sorted(net.items(), key=lambda kv: -kv[1]) if s > 0][:6]
@@ -152,18 +154,18 @@ def preference_summary(conn: sqlite3.Connection) -> str:
 # --- full data export (everything the app stores about the user) ---
 
 
-def export_all(conn: sqlite3.Connection) -> dict:
+def export_all(conn: psycopg.Connection) -> dict:
     plans = []
     for p in conn.execute("SELECT id, created_at, week FROM plans ORDER BY id"):
         recipes = []
         for r in conn.execute(
-            "SELECT * FROM recipes WHERE plan_id = ? ORDER BY slot_index", (p["id"],)
+            "SELECT * FROM recipes WHERE plan_id = %s ORDER BY slot_index", (p["id"],)
         ):
             ingredients = [
                 {"name": i["name"], "grams": i["grams"], "name_translated": i["name_translated"]}
                 for i in conn.execute(
                     "SELECT name, grams, name_translated FROM recipe_ingredients "
-                    "WHERE recipe_id = ? ORDER BY id",
+                    "WHERE recipe_id = %s ORDER BY id",
                     (r["id"],),
                 )
             ]
@@ -181,12 +183,12 @@ def export_all(conn: sqlite3.Connection) -> dict:
                 "flagged": bool(r["flagged"]),
                 "ingredients": ingredients,
             })
-        plans.append({"id": p["id"], "created_at": p["created_at"], "week": p["week"],
+        plans.append({"id": p["id"], "created_at": p["created_at"].isoformat(), "week": p["week"],
                       "recipes": recipes})
     missing = [
-        dict(r) for r in conn.execute(
+        {**r, "last_seen": r["last_seen"].isoformat()} for r in conn.execute(
             "SELECT name, hits, caused_revise, sample_grams, last_seen FROM missing_ingredients "
-            "ORDER BY caused_revise DESC, hits DESC"
+            "ORDER BY caused_revise DESC, hits DESC, name"
         )
     ]
     return {
@@ -197,7 +199,7 @@ def export_all(conn: sqlite3.Connection) -> dict:
     }
 
 
-def ratings_csv(conn: sqlite3.Connection) -> str:
+def ratings_csv(conn: psycopg.Connection) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["created_at", "title", "score", "tags"])
@@ -284,11 +286,3 @@ def export_ratings_csv(conn: Conn):
         headers={"Content-Disposition": "attachment; filename=ratings.csv"},
     )
 
-
-@router.get("/me/database.db")
-def export_database(request: Request):
-    return FileResponse(
-        request.app.state.config.db_path,
-        media_type="application/octet-stream",
-        filename="food_service.db",
-    )

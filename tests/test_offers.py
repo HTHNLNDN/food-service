@@ -2,7 +2,6 @@ from decimal import Decimal
 
 import httpx
 
-from app.db import bootstrap, connect
 from app.offers import SHELFATLAS_BASE, Offer, ShelfAtlasOffersProvider
 
 
@@ -23,9 +22,7 @@ def _raw_offer(slug: str) -> dict:
     }
 
 
-def _provider(tmp_path):
-    conn = connect(tmp_path / "o.db")
-    bootstrap(conn)
+def _provider(conn):
     state = {"calls": 0, "slugs": []}
 
     def handler(request):
@@ -38,8 +35,8 @@ def _provider(tmp_path):
     return ShelfAtlasOffersProvider(conn, api_key="test", client=client), state
 
 
-def test_offers_returns_only_selected_chains(tmp_path):
-    provider, state = _provider(tmp_path)
+def test_offers_returns_only_selected_chains(conn):
+    provider, state = _provider(conn)
     offers = provider.offers(["rema"])
     assert offers  # non-empty
     assert all(o.chain_slug == "rema" for o in offers)
@@ -48,8 +45,8 @@ def test_offers_returns_only_selected_chains(tmp_path):
     assert set(state["slugs"]) == {"rema"}
 
 
-def test_offers_parses_fields(tmp_path):
-    provider, _ = _provider(tmp_path)
+def test_offers_parses_fields(conn):
+    provider, _ = _provider(conn)
     offer = provider.offers(["rema"])[0]
     assert isinstance(offer, Offer)
     assert offer.name == "REMA tilbud"
@@ -57,22 +54,22 @@ def test_offers_parses_fields(tmp_path):
     assert offer.currency == "DKK"
 
 
-def test_offers_are_cached_within_the_week(tmp_path):
-    provider, state = _provider(tmp_path)
+def test_offers_are_cached_within_the_week(conn):
+    provider, state = _provider(conn)
     provider.offers(["rema"])
     provider.offers(["rema"])
     assert state["calls"] == 1  # second call served from cache
 
 
-def test_refresh_forces_refetch(tmp_path):
-    provider, state = _provider(tmp_path)
+def test_refresh_forces_refetch(conn):
+    provider, state = _provider(conn)
     provider.offers(["rema"])
     provider.offers(["rema"], refresh=True)
     assert state["calls"] == 2
 
 
-def test_multiple_selected_chains_each_fetched(tmp_path):
-    provider, state = _provider(tmp_path)
+def test_multiple_selected_chains_each_fetched(conn):
+    provider, state = _provider(conn)
     offers = provider.offers(["rema", "netto"])
     assert {o.chain_slug for o in offers} == {"rema", "netto"}
     assert set(state["slugs"]) == {"rema", "netto"}

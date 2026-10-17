@@ -1,6 +1,5 @@
 from datetime import UTC, datetime
 
-from app.db import bootstrap, connect
 from app.history import (
     PastDish,
     _norm_title,
@@ -11,29 +10,22 @@ from app.nutrition import Ingredient
 from app.profile import save_rating
 
 
-def _conn(tmp_path):
-    conn = connect(tmp_path / "h.db")
-    bootstrap(conn)
-    return conn
-
-
 def _add_plan(conn, dishes):
     """dishes: list of (title, [ingredient names]). Persists one plan; returns its id."""
-    cur = conn.execute(
-        "INSERT INTO plans (created_at, week) VALUES (?, ?)",
-        (datetime.now(UTC).isoformat(), "2026-W01"),
-    )
-    plan_id = cur.lastrowid
+    plan_id = conn.execute(
+        "INSERT INTO plans (created_at, week) VALUES (%s, %s) RETURNING id",
+        (datetime.now(UTC), "2026-W01"),
+    ).fetchone()["id"]
     for slot, (title, names) in enumerate(dishes):
-        rc = conn.execute(
-            "INSERT INTO recipes (plan_id, slot_index, title, servings, steps) VALUES (?, ?, ?, ?, '[]')",
+        recipe_id = conn.execute(
+            "INSERT INTO recipes (plan_id, slot_index, title, servings, steps) "
+            "VALUES (%s, %s, %s, %s, '[]') RETURNING id",
             (plan_id, slot, title, 4),
+        ).fetchone()["id"]
+        conn.cursor().executemany(
+            "INSERT INTO recipe_ingredients (recipe_id, name, grams) VALUES (%s, %s, 100)",
+            [(recipe_id, n) for n in names],
         )
-        conn.executemany(
-            "INSERT INTO recipe_ingredients (recipe_id, name, grams) VALUES (?, ?, 100)",
-            [(rc.lastrowid, n) for n in names],
-        )
-    conn.commit()
     return plan_id
 
 
@@ -69,15 +61,13 @@ def test_not_a_repeat_when_distinct():
 # --- cooldown selection ---
 
 
-def test_recent_neutral_dish_is_avoided(tmp_path):
-    conn = _conn(tmp_path)
+def test_recent_neutral_dish_is_avoided(conn):
     _add_plan(conn, [("Chicken Bowl", ["chicken breast", "rice"])])
     titles = {p.title for p in recent_avoided(conn)}
     assert "Chicken Bowl" in titles
 
 
-def test_liked_dish_is_not_avoided(tmp_path):
-    conn = _conn(tmp_path)
+def test_liked_dish_is_not_avoided(conn):
     _add_plan(conn, [("Loved Dish", ["salmon"]), ("Meh Dish", ["pork"])])
     save_rating(conn, "Loved Dish", 1, ["salmon"])  # 👍
     titles = {p.title for p in recent_avoided(conn)}
@@ -85,8 +75,7 @@ def test_liked_dish_is_not_avoided(tmp_path):
     assert "Meh Dish" in titles         # neutral -> still on cooldown
 
 
-def test_disliked_dish_avoided_even_beyond_window(tmp_path):
-    conn = _conn(tmp_path)
+def test_disliked_dish_avoided_even_beyond_window(conn):
     _add_plan(conn, [("Hated Dish", ["liver"])])       # oldest plan
     for _ in range(5):                                  # push it well past the 4-plan window
         _add_plan(conn, [("Filler", ["chicken"])])
@@ -95,8 +84,7 @@ def test_disliked_dish_avoided_even_beyond_window(tmp_path):
     assert "Hated Dish" in titles                       # disliked -> permanent avoid
 
 
-def test_neutral_dish_falls_off_after_window(tmp_path):
-    conn = _conn(tmp_path)
+def test_neutral_dish_falls_off_after_window(conn):
     _add_plan(conn, [("Old Neutral", ["cod"])])         # oldest
     for _ in range(4):
         _add_plan(conn, [("Filler", ["chicken"])])
