@@ -112,6 +112,8 @@ no defaults for them.
 | `TRANSLATE_BASE_URL` | no | Separate endpoint for display translation; unset = reuse `LLM_*` |
 | `TRANSLATE_MODEL` | no | As above |
 | `TRANSLATE_API_KEY` | no | Secret. As above |
+| `USERNAME_KEY` | yes | Secret. Key for hashing usernames, at least 32 bytes as hex (`openssl rand -hex 32`). **Never change or lose it**: every account would be locked out. The app won't start without it. |
+| `SIGNUP_CODE` | no | Invite code people need to create an account. Empty means sign-up is closed. |
 
 `USDA_DB_PATH` is already set to `/app/data/usda.db` in the image. Only override it if you
 also change the volume mount.
@@ -136,11 +138,59 @@ docker exec -i food-service-db pg_restore -U food -d food_service --clean --if-e
 - **App:** pull the new tag and `docker compose up -d`. Migrations run on start, and the whole
   upgrade runs in one transaction. If anything fails, the schema is left exactly as it was
   and the container exits (the logs show why). Redeploy the previous `:<sha>` tag.
+- **Rolling back across a migration:** an image that finds the database at a revision it
+  doesn't know (a newer image migrated it) logs a warning and leaves the schema alone. Images
+  built **before that check existed** (everything up to and including
+  `85933f28d05793e24bbadb39a4fd86615183fb28`) refuse to start instead
+  (`Can't locate revision identified by '0002'`). Roll back to those with the migration step
+  skipped by adding this to the app service:
+
+  ```yaml
+      command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000",
+                "--proxy-headers", "--forwarded-allow-ips", "*"]
+  ```
+
 - **Migration rule:** every migration must keep the *previous* image working. Add tables and
   columns freely. Rename or drop in a later release (expand, then contract). This is what
   makes rolling back the app to the previous `:<sha>` safe without `alembic downgrade`.
 - **Postgres major version** (e.g. 18 → 19): `pg_dump` from the old container, start the new
   version on a fresh volume, then `pg_restore`.
+
+## Users
+
+People create their own account at `/signup` with the invite code (`SIGNUP_CODE`). Clear
+`SIGNUP_CODE` and restart to close sign-up. Change it to invalidate the old one.
+
+What the database stores about an account:
+
+- **Username:** never stored. Only `HMAC-SHA256(USERNAME_KEY, username)`, so a leaked
+  database or backup doesn't reveal who has an account.
+- **Password:** only an Argon2id hash.
+- **Sessions:** only a SHA-256 of each session token.
+
+**There is no password reset and no admin account tooling, on purpose.** A forgotten
+password means a lost account. Its data stays in the database, owned by an account nobody
+can sign in to.
+
+**`USERNAME_KEY` must never be lost or changed.** Without the same key, no username matches
+anymore, so nobody can sign in. Back it up with the env file. Generate it once:
+
+```bash
+openssl rand -hex 32
+```
+
+**Upgrading from the version without accounts:** migration `0002` keeps existing plans,
+ratings and preferences but leaves them unowned, so nobody sees them. Create your account at
+`/signup`, then hand the old data to it, once. It asks for that account's username and
+password:
+
+```bash
+docker compose run --rm food-service python -m app.users claim-existing
+```
+
+The session cookie is `Secure` only when the request reached the app over HTTPS, which means
+the proxy has to send `X-Forwarded-Proto` (Caddy does by default). The app does its own login,
+so **don't also put `basic_auth` on the proxy**: people would have to sign in twice.
 
 ## Notes
 
@@ -149,5 +199,5 @@ docker exec -i food-service-db pg_restore -U food -d food_service --clean --if-e
   one planning job runs at a time. Don't scale it to multiple replicas or workers.
 - If the database goes away, pages return 503 "Database unavailable" and recover on their own
   once it's back.
-- The app has no authentication. Put access control (basic auth, SSO, IP allowlist) on the
-  reverse proxy.
+- Failed logins are throttled in memory (5 per username + IP per 15 min), which is another
+  reason to keep it to a single process.

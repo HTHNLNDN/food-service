@@ -6,6 +6,7 @@ from app.offers import Offer
 from app.planner import decline, generate_plan, load_plan
 from app.profile import Preferences, save_preferences
 from app.shopping import build_shopping_list
+from tests.conftest import TEST_USER_ID
 
 WITHIN = Macros(100, 20, 0, 0)
 
@@ -46,12 +47,12 @@ def _recipe(title, *ings):
 
 
 def _conn(conn):
-    save_preferences(conn, Preferences(600, 15, "", 2, ["rema"]))
+    save_preferences(conn, TEST_USER_ID, Preferences(600, 15, "", 2, ["rema"]))
     return conn
 
 
 def _plan(conn, agent):
-    return generate_plan(conn, agent=agent, offers=FakeOffers(), nutrition=FakeNutrition(), num_dinners=2)
+    return generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers(), nutrition=FakeNutrition(), num_dinners=2)
 
 
 def test_decline_replaces_dish_and_persists(conn):
@@ -59,18 +60,18 @@ def test_decline_replaces_dish_and_persists(conn):
     agent = FakeAgent([_recipe("A", "unicorn"), _recipe("B", "beef")], _recipe("C", "chicken"))
     plan = _plan(conn, agent)
 
-    updated = decline(conn, plan.id, 0, agent=agent, offers=FakeOffers(), nutrition=FakeNutrition())
+    updated = decline(conn, TEST_USER_ID, plan.id, 0, agent=agent, offers=FakeOffers(), nutrition=FakeNutrition())
     assert [r.title for r in updated.recipes] == ["C", "B"]
     assert not updated.recipes[0].flagged
     # persisted
-    assert [r.title for r in load_plan(conn, plan.id).recipes] == ["C", "B"]
+    assert [r.title for r in load_plan(conn, TEST_USER_ID, plan.id).recipes] == ["C", "B"]
 
 
 def test_declined_unique_ingredient_removed_from_shopping(conn):
     conn = _conn(conn)
     agent = FakeAgent([_recipe("A", "unicorn"), _recipe("B", "beef")], _recipe("C", "chicken"))
     plan = _plan(conn, agent)
-    updated = decline(conn, plan.id, 0, agent=agent, offers=FakeOffers(), nutrition=FakeNutrition())
+    updated = decline(conn, TEST_USER_ID, plan.id, 0, agent=agent, offers=FakeOffers(), nutrition=FakeNutrition())
 
     offers = [Offer("rema", "Chicken", Decimal(20), "DKK", "", "", None, None, None, "campaign")]
     sl = build_shopping_list(updated.recipes, offers, ["rema"])

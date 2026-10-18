@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+{% if saved %}<p class="toast show" id="toast">Password changed. Other devices were signed out.</p>{% endif %}
+<h2>Account</h2>
+<p class="muted">Your username isn't stored in readable form, so the app can't show it or remind
+you of it. Remember it, or let your browser save it. There's no password reset: a forgotten
+password means a lost account.</p>
+
+<h3>Change password</h3>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/account/password" class="stack">
+  <label>Current password
+    <input type="password" name="current_password" autocomplete="current-password" required>
+  </label>
+  <label>New password <span class="muted">(at least 8 characters)</span>
+    <input type="password" name="new_password" autocomplete="new-password" minlength="8" required>
+  </label>
+  <label>Repeat new password
+    <input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required>
+  </label>
+  <button type="submit">Change password</button>
+</form>
+<p class="muted">Changing your password signs you out on every other device.</p>
+
+<form method="post" action="/logout">
+  <button type="submit" class="secondary">Sign out</button>
+</form>
+{% endblock %}

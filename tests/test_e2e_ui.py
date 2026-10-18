@@ -19,6 +19,7 @@ from app.agent import Recipe
 from app.main import app
 from app.nutrition import Ingredient, Macros
 from app.services import Services
+from tests.conftest import TEST_PASSWORD, TEST_USERNAME
 
 
 class _FakeAgent:
@@ -90,6 +91,17 @@ def live_server(db):
     yield f"http://127.0.0.1:{port}"
     server.should_exit = True
     thread.join(timeout=5)
+
+
+@pytest.fixture
+def page(page, live_server):
+    """pytest-playwright's page, signed in through the real login form as the test user."""
+    page.goto(f"{live_server}/login")
+    page.fill("input[name=username]", TEST_USERNAME)
+    page.fill("input[name=password]", TEST_PASSWORD)
+    page.click("button[type=submit]")
+    page.wait_for_url(f"{live_server}/")
+    return page
 
 
 def test_plan_flow_clickthrough(live_server, page):

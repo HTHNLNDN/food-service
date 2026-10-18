@@ -13,7 +13,7 @@ APP_TABLES = (
     "_meta", "preferences", "stores", "ratings", "resolve_cache", "nutrition_cache",
     "llm_calls", "eval_runs", "eval_scores", "ui_translations", "model_prices",
     "missing_ingredients", "offers_cache", "offer_match_cache", "plans", "recipes",
-    "recipe_ingredients",
+    "recipe_ingredients", "users", "sessions", "user_preferences", "user_stores",
 )
 
 

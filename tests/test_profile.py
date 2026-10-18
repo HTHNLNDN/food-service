@@ -8,12 +8,13 @@ from app.profile import (
     save_preferences,
     selected_store_slugs,
 )
+from tests.conftest import TEST_USER_ID, login
 
 # --- repository ---
 
 
 def test_defaults_when_empty(conn):
-    prefs = load_preferences(conn)
+    prefs = load_preferences(conn, TEST_USER_ID)
     assert prefs.servings == 2
     assert prefs.stores == []
     assert prefs.max_kcal is None
@@ -24,10 +25,11 @@ def test_defaults_when_empty(conn):
 def test_save_and_load_roundtrip(conn):
     save_preferences(
         conn,
+        TEST_USER_ID,
         Preferences(max_kcal=600, min_protein_g=40, restrictions="PCOS, no nuts",
                     servings=2, stores=["rema", "netto"]),
     )
-    prefs = load_preferences(conn)
+    prefs = load_preferences(conn, TEST_USER_ID)
     assert prefs.max_kcal == 600
     assert prefs.min_protein_g == 40
     assert prefs.restrictions == "PCOS, no nuts"
@@ -36,23 +38,23 @@ def test_save_and_load_roundtrip(conn):
 
 
 def test_save_replaces_previous_state(conn):
-    save_preferences(conn, Preferences(500, 30, "", 2, ["rema"]))
-    save_preferences(conn, Preferences(700, 45, "vegan", 3, ["netto", "lidl"]))
-    prefs = load_preferences(conn)
+    save_preferences(conn, TEST_USER_ID, Preferences(500, 30, "", 2, ["rema"]))
+    save_preferences(conn, TEST_USER_ID, Preferences(700, 45, "vegan", 3, ["netto", "lidl"]))
+    prefs = load_preferences(conn, TEST_USER_ID)
     assert prefs.max_kcal == 700
     assert prefs.servings == 3
     assert prefs.stores == ["lidl", "netto"]  # replaced, not appended
 
 
 def test_selected_store_slugs_is_the_whitelist(conn):
-    save_preferences(conn, Preferences(None, None, "", 2, ["rema"]))
-    assert selected_store_slugs(conn) == ["rema"]
+    save_preferences(conn, TEST_USER_ID, Preferences(None, None, "", 2, ["rema"]))
+    assert selected_store_slugs(conn, TEST_USER_ID) == ["rema"]
 
 
 def test_language_defaults_empty_and_roundtrips(conn):
-    assert load_preferences(conn).language == ""  # empty = English, no translation
-    save_preferences(conn, Preferences(None, None, "", 2, ["rema"], language="Danish"))
-    assert load_preferences(conn).language == "Danish"
+    assert load_preferences(conn, TEST_USER_ID).language == ""  # empty = English, no translation
+    save_preferences(conn, TEST_USER_ID, Preferences(None, None, "", 2, ["rema"], language="Danish"))
+    assert load_preferences(conn, TEST_USER_ID).language == "Danish"
 
 
 def test_chains_cover_expected_dk_slugs():
@@ -66,6 +68,7 @@ def test_chains_cover_expected_dk_slugs():
 
 def test_post_profile_persists_and_export_returns_json(db):
     with TestClient(app) as client:
+        login(client)
         resp = client.post(
             "/profile",
             data={
@@ -90,12 +93,14 @@ def test_post_profile_persists_and_export_returns_json(db):
 
 def test_post_profile_redirects_with_saved_flag(db):
     with TestClient(app) as client:
+        login(client)
         resp = client.post("/profile", data={"servings": "2"}, follow_redirects=False)
     assert resp.headers["location"] == "/profile?saved=1"
 
 
 def test_save_toast_mentions_translation_timing_only_when_language_set(db):
     with TestClient(app) as client:
+        login(client)
         client.post("/profile", data={"servings": "2", "language": "Danish"}, follow_redirects=False)
         with_lang = client.get("/profile?saved=1").text
         client.post("/profile", data={"servings": "2", "language": ""}, follow_redirects=False)
@@ -107,12 +112,14 @@ def test_save_toast_mentions_translation_timing_only_when_language_set(db):
 
 def test_no_toast_without_saved_flag(db):
     with TestClient(app) as client:
+        login(client)
         html = client.get("/profile").text
     assert 'id="toast"' not in html
 
 
 def test_post_profile_ignores_unknown_store_slug(db):
     with TestClient(app) as client:
+        login(client)
         client.post(
             "/profile",
             data={"servings": "2", "stores": ["rema", "not-a-real-chain"]},
@@ -126,12 +133,13 @@ def test_post_profile_ignores_unknown_store_slug(db):
 
 
 def test_bans_save_and_load_roundtrip(conn):
-    save_preferences(conn, Preferences(600, 40, "", 2, ["rema"], ["fish", "mushroom"]))
-    assert load_preferences(conn).bans == ["fish", "mushroom"]
+    save_preferences(conn, TEST_USER_ID, Preferences(600, 40, "", 2, ["rema"], ["fish", "mushroom"]))
+    assert load_preferences(conn, TEST_USER_ID).bans == ["fish", "mushroom"]
 
 
 def test_post_profile_persists_bans_and_lowercases_custom(db):
     with TestClient(app) as client:
+        login(client)
         client.post(
             "/profile",
             data={"servings": "2", "bans": ["fish", "dairy"], "bans_custom": "mushrooms, Salmon"},
@@ -143,6 +151,7 @@ def test_post_profile_persists_bans_and_lowercases_custom(db):
 
 def test_unchecking_a_ban_removes_it(db):
     with TestClient(app) as client:
+        login(client)
         client.post("/profile", data={"servings": "2", "bans": ["fish", "dairy"], "bans_custom": "salmon"},
                     follow_redirects=False)
         # re-save with fish unchecked (salmon custom kept as its own chip)
@@ -154,6 +163,7 @@ def test_unchecking_a_ban_removes_it(db):
 
 def test_custom_bans_render_as_removable_chips(db):
     with TestClient(app) as client:
+        login(client)
         client.post("/profile", data={"servings": "2", "bans_custom": "mushrooms"}, follow_redirects=False)
         html = client.get("/profile").text
     assert 'value="mushrooms"' in html   # custom ban is a (checked) chip

@@ -20,7 +20,7 @@ from app.nutrition import Ingredient, Macros
 from app.planner import PlannedRecipe
 from app.services import Services
 from app.shopping import _cache_put
-from tests.conftest import ROOT, alembic_config
+from tests.conftest import HEAD, ROOT, TEST_USER_ID, alembic_config, login
 
 
 def _tables(conn) -> set[str]:
@@ -53,7 +53,7 @@ def test_concurrent_upgrades_both_succeed(pg_url, conn):
     outputs = [p.communicate(timeout=60)[0] for p in procs]
     assert [p.returncode for p in procs] == [0, 0], outputs
     assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [
-        {"version_num": "0001"}
+        {"version_num": HEAD}
     ]
 
 
@@ -74,7 +74,7 @@ def test_plan_save_is_atomic(conn, monkeypatch):
 
     monkeypatch.setattr(planner, "_insert_recipes", fail_after_first_dish)
     with pytest.raises(RuntimeError):
-        planner._persist(conn, [_planned("A"), _planned("B")])
+        planner._persist(conn, TEST_USER_ID, [_planned("A"), _planned("B")])
     for table in ("plans", "recipes", "recipe_ingredients"):
         assert conn.execute(f"SELECT COUNT(*) n FROM {table}").fetchone()["n"] == 0
 
@@ -129,6 +129,7 @@ def test_no_idle_in_transaction_during_background_job(db):
     inside an open transaction (that would hold locks for minutes once there are many users)."""
     agent = _BlockingAgent()
     with TestClient(app) as client:
+        login(client)
         client.app.state.build_services = lambda config, conn: Services(
             agent, _NoOffers(), _Nutrition(), None)
         client.post("/profile", data={"servings": "2", "stores": ["rema"]}, follow_redirects=False)
@@ -142,9 +143,10 @@ def test_no_idle_in_transaction_during_background_job(db):
         finally:
             agent.release.set()
         deadline = time.monotonic() + 10
-        while ui._plan_state["running"] and time.monotonic() < deadline:
+        while ui.plan_state(TEST_USER_ID)["running"] and time.monotonic() < deadline:
             time.sleep(0.05)
-        assert not ui._plan_state["running"] and ui._plan_state["error"] is None
+        state = ui.plan_state(TEST_USER_ID)
+        assert not state["running"] and state["error"] is None
         assert "Rice bowl" in client.get("/").text
     assert idle == 0
 
@@ -154,6 +156,7 @@ def test_no_idle_in_transaction_during_background_job(db):
 
 def test_db_outage_renders_503(db, monkeypatch):
     with TestClient(app) as client:
+        login(client)
         def down(*args, **kwargs):
             raise psycopg.OperationalError("connection refused")
 
@@ -173,3 +176,18 @@ def test_telemetry_against_dead_db_never_raises():
     finally:
         telemetry.configure(None)
         pool.close()
+
+
+def test_an_older_image_leaves_a_newer_schema_alone(pg_url, conn):
+    """Rollback: the DB was migrated by a newer image this code doesn't know. Starting must
+    not fail (the schema is backward compatible) and must not touch the schema."""
+    conn.execute("UPDATE alembic_version SET version_num = '9999'")
+    try:
+        proc = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=ROOT,
+                              env={**os.environ, "DATABASE_URL": pg_url},
+                              capture_output=True, text=True, timeout=60, check=False)
+        assert proc.returncode == 0, proc.stderr
+        assert "newer than this image knows" in proc.stderr
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone()["version_num"] == "9999"
+    finally:
+        conn.execute("UPDATE alembic_version SET version_num = %s", (HEAD,))

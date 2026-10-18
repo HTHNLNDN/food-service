@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Sign in</h2>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{# Standard field names + autocomplete hints: browsers and phone password managers offer to
+   save these credentials and fill them in next time. #}
+<form method="post" action="/login" class="stack">
+  <input type="hidden" name="next" value="{{ next }}">
+  <label>Username
+    <input type="text" name="username" value="{{ username }}" autocomplete="username"
+           autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
+  </label>
+  <label>Password
+    <input type="password" name="password" autocomplete="current-password" required>
+  </label>
+  <label class="chip">
+    <input type="checkbox" name="remember" value="1" checked>
+    Keep me signed in on this device
+  </label>
+  <button type="submit">Sign in</button>
+</form>
+{% if signup_open %}
+<p>No account yet? <a href="/signup">Create one</a> (you'll need the invite code).</p>
+{% endif %}
+{% endblock %}

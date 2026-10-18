@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Create account</h2>
+{% if not signup_open %}
+<p>Sign-up is closed right now. <a href="/login">Sign in</a> instead.</p>
+{% else %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<p class="lead">Pick any username and password. Neither is stored as you typed it: your username
+only as a keyed fingerprint, your password only as a one-way hash, so they can't be read from
+the database or its backups.</p>
+<p><b>There is no password reset.</b> If you forget your password, the account and everything in
+it are gone. Let your browser or phone save it when it offers to.</p>
+{# autocomplete="new-password" makes browsers suggest a strong password and offer to save it #}
+<form method="post" action="/signup" class="stack">
+  <label>Invite code
+    <input type="text" name="invite_code" autocomplete="off" autocapitalize="none"
+           spellcheck="false" required>
+  </label>
+  <label>Username <span class="muted">(3–64 characters, no spaces)</span>
+    <input type="text" name="username" value="{{ username }}" autocomplete="username"
+           autocapitalize="none" autocorrect="off" spellcheck="false" minlength="3" maxlength="64"
+           required>
+  </label>
+  <label>Password <span class="muted">(at least 8 characters)</span>
+    <input type="password" name="password" autocomplete="new-password" minlength="8" required>
+  </label>
+  <label>Repeat password
+    <input type="password" name="confirm_password" autocomplete="new-password" minlength="8" required>
+  </label>
+  <label class="chip">
+    <input type="checkbox" name="understood" value="1" required>
+    I understand a forgotten password can't be recovered
+  </label>
+  <button type="submit">Create account</button>
+</form>
+<p class="muted">Already have an account? <a href="/login">Sign in</a></p>
+{% endif %}
+{% endblock %}

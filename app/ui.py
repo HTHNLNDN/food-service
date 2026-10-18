@@ -6,6 +6,7 @@ import psycopg
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from app.auth import CurrentUser
 from app.dates import iso_week
 from app.db import Conn
 from app.planner import decline, generate_plan, is_print_compact, load_latest_plan, weekday_meals
@@ -16,21 +17,32 @@ router = APIRouter()
 
 # Planning is slow (~1-2 min of grounded LLM + macro checks), which exceeds a phone browser's
 # request timeout. So POST /plan starts the work in the background and returns immediately; the
-# page shows "Planning…" and auto-refreshes until it's ready. Single household -> one job, tracked
-# in module state. `declining_slot`/`declining_title` distinguish a single-dish decline from a
+# page shows "Planning…" and auto-refreshes until it's ready. One job at a time per user, tracked
+# in module state keyed by user id. `declining_slot`/`declining_title` distinguish a single-dish decline from a
 # full replan, so only that dish's card greys out instead of the whole page taking over (a decline
 # is still one job at a time, same as a full plan). Tests set app.state.plan_sync to run inline.
 _plan_lock = threading.Lock()
-_plan_state: dict[str, object] = {
-    "running": False, "error": None, "declining_slot": None, "declining_title": None,
-}
+_plan_states: dict[int, dict[str, object]] = {}
+
+
+def _state(user_id: int) -> dict[str, object]:
+    """This user's job state (call with _plan_lock held)."""
+    return _plan_states.setdefault(user_id, {
+        "running": False, "error": None, "declining_slot": None, "declining_title": None,
+    })
+
+
+def plan_state(user_id: int) -> dict[str, object]:
+    """A snapshot of the user's job state."""
+    with _plan_lock:
+        return dict(_state(user_id))
 
 
 def _friendly(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:400]
 
 
-def _run_job(pool, config, build, work) -> None:
+def _run_job(pool, config, build, work, user_id: int) -> None:
     error = None
     try:
         with pool.connection() as conn:  # the thread needs its own connection
@@ -38,33 +50,36 @@ def _run_job(pool, config, build, work) -> None:
     except Exception as exc:  # noqa: BLE001 - surface planning failures in the UI, never as a 500
         error = _friendly(exc)
     with _plan_lock:
-        _plan_state["error"] = error
-        _plan_state["running"] = False
-        _plan_state["declining_slot"] = None
-        _plan_state["declining_title"] = None
+        state = _state(user_id)
+        state["error"] = error
+        state["running"] = False
+        state["declining_slot"] = None
+        state["declining_title"] = None
 
 
-def _start_job(request: Request, work, *, declining_slot: int | None = None,
+def _start_job(request: Request, user_id: int, work, *, declining_slot: int | None = None,
                declining_title: str | None = None) -> None:
     """Run `work(conn, services)` in the background (or inline when app.state.plan_sync)."""
     with _plan_lock:
-        if _plan_state["running"]:
-            return  # a job is already in flight — ignore the duplicate submit
-        _plan_state["running"] = True
-        _plan_state["error"] = None
-        _plan_state["declining_slot"] = declining_slot
-        _plan_state["declining_title"] = declining_title
+        state = _state(user_id)
+        if state["running"]:
+            return  # this user already has a job in flight — ignore the duplicate submit
+        state["running"] = True
+        state["error"] = None
+        state["declining_slot"] = declining_slot
+        state["declining_title"] = declining_title
     pool = request.app.state.pool
     config = request.app.state.config
     build = request.app.state.build_services
     if getattr(request.app.state, "plan_sync", False):
-        _run_job(pool, config, build, work)  # deterministic path for tests
+        _run_job(pool, config, build, work, user_id)  # deterministic path for tests
     else:
-        threading.Thread(target=_run_job, args=(pool, config, build, work), daemon=True).start()
+        threading.Thread(target=_run_job, args=(pool, config, build, work, user_id),
+                         daemon=True).start()
 
 
-def _shopping_for(request: Request, conn: psycopg.Connection, plan):
-    selected = selected_store_slugs(conn)
+def _shopping_for(request: Request, conn: psycopg.Connection, user_id: int, plan):
+    selected = selected_store_slugs(conn, user_id)
     if not (plan and selected):
         return None
     try:
@@ -81,7 +96,7 @@ def _shopping_for(request: Request, conn: psycopg.Connection, plan):
 def _still_declining(plan, slot: int | None, title: str | None) -> int | None:
     """The slot to render as busy, or None once the DB already shows its replacement.
 
-    `_plan_state` is cleared by the background job only *after* it commits the new dish, so a
+    The job state is cleared by the background job only *after* it commits the new dish, so a
     request can land in the gap between that commit and the flag reset. Comparing against the
     dish still in the DB (rather than trusting the flag alone) closes that race: the moment the
     new title lands, the card stops looking busy even if the flag hasn't caught up yet."""
@@ -90,14 +105,12 @@ def _still_declining(plan, slot: int | None, title: str | None) -> int | None:
     return slot if plan.recipes[slot].title == title else None
 
 
-def _render_home(request: Request, conn: psycopg.Connection):
-    with _plan_lock:
-        running = _plan_state["running"]
-        error = _plan_state["error"]
-        declining_slot = _plan_state["declining_slot"]
-        declining_title = _plan_state["declining_title"]
+def _render_home(request: Request, conn: psycopg.Connection, user_id: int):
+    state = plan_state(user_id)
+    running, error = state["running"], state["error"]
+    declining_slot, declining_title = state["declining_slot"], state["declining_title"]
     config = request.app.state.config
-    plan = load_latest_plan(conn)
+    plan = load_latest_plan(conn, user_id)
     busy_slot = _still_declining(plan, declining_slot, declining_title)
     return request.app.state.templates.TemplateResponse(
         request,
@@ -116,13 +129,13 @@ def _render_home(request: Request, conn: psycopg.Connection):
 
 
 @router.get("/", response_class=HTMLResponse)
-def home(request: Request, conn: Conn):
-    return _render_home(request, conn)
+def home(request: Request, conn: Conn, user: CurrentUser):
+    return _render_home(request, conn, user.id)
 
 
 @router.get("/print", response_class=HTMLResponse)
-def print_recipes(request: Request, conn: Conn):
-    plan = load_latest_plan(conn)
+def print_recipes(request: Request, conn: Conn, user: CurrentUser):
+    plan = load_latest_plan(conn, user.id)
     # _shopping_for shares /shopping's cold-cache network profile (ShelfAtlas + LLM matcher,
     # cached per ISO-week) — on first load this week, /print can block on that the same way
     # /shopping does. Degrades gracefully either way: recipes always render regardless.
@@ -130,7 +143,7 @@ def print_recipes(request: Request, conn: Conn):
         request, "print.html",
         {
             "title": "Recipes", "plan": plan, "is_print_compact": is_print_compact,
-            "shopping": _shopping_for(request, conn, plan),
+            "shopping": _shopping_for(request, conn, user.id, plan),
         },
     )
 
@@ -143,45 +156,51 @@ def more_menu(request: Request):
 
 
 @router.get("/cost", response_class=HTMLResponse)
-def cost(request: Request, conn: Conn):
+def cost(request: Request, conn: Conn, user: CurrentUser):
+    """The signed-in user's LLM spend (llm_calls.tenant_id = user id; see app/auth.py)."""
+    tenant = str(user.id)
     by_type = conn.execute(
         "SELECT call_type, model, COUNT(*) n, COALESCE(SUM(input_tokens),0) in_tok, "
         "COALESCE(SUM(output_tokens),0) out_tok, COALESCE(SUM(search_queries),0) sq, "
         "SUM(usd) usd, COALESCE(SUM(retries),0) retries, "
         "SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END) errs, AVG(latency_ms)::float avg_ms "
-        "FROM v_llm_cost GROUP BY call_type, model ORDER BY usd DESC"
+        "FROM v_llm_cost WHERE tenant_id = %s GROUP BY call_type, model ORDER BY usd DESC",
+        (tenant,),
     ).fetchall()
-    totals = conn.execute("SELECT COUNT(*) n, COALESCE(SUM(usd),0) usd FROM v_llm_cost").fetchone()
+    totals = conn.execute("SELECT COUNT(*) n, COALESCE(SUM(usd),0) usd FROM v_llm_cost "
+                          "WHERE tenant_id = %s", (tenant,)).fetchone()
     plans = conn.execute(
         "SELECT p.id, p.created_at::date::text created_at, "
         "(SELECT COALESCE(SUM(usd),0) FROM v_llm_cost c WHERE c.plan_id = p.id) usd, "
         "(SELECT COUNT(*) FROM llm_calls c WHERE c.plan_id = p.id AND c.call_type='replace') revises, "
         "(SELECT COUNT(*) FROM recipes r WHERE r.plan_id = p.id) dinners, "
         "(SELECT COALESCE(SUM(flagged::int),0) FROM recipes r WHERE r.plan_id = p.id) flagged "
-        "FROM plans p ORDER BY p.id DESC LIMIT 10"
+        "FROM plans p WHERE p.user_id = %s ORDER BY p.id DESC LIMIT 10", (user.id,)
     ).fetchall()
     unpriced = [r["model"] for r in conn.execute(
-        "SELECT DISTINCT model FROM llm_calls WHERE model NOT IN (SELECT model FROM model_prices)"
+        "SELECT DISTINCT model FROM llm_calls WHERE tenant_id = %s "
+        "AND model NOT IN (SELECT model FROM model_prices)", (tenant,)
     )]
     return request.app.state.templates.TemplateResponse(
         request, "cost.html",
         {"title": "Cost", "by_type": by_type, "totals": totals, "plans": plans,
-         "unpriced": unpriced, "trends": _weekly_trends(conn)},
+         "unpriced": unpriced, "trends": _weekly_trends(conn, user.id)},
     )
 
 
-def _weekly_trends(conn: psycopg.Connection) -> list[dict]:
+def _weekly_trends(conn: psycopg.Connection, user_id: int) -> list[dict]:
     """Efficacy over time, per ISO week — derived from stored plans/recipes/traces, no new spend."""
     weeks = conn.execute(
         "SELECT p.week week, COUNT(DISTINCT p.id) plans, COUNT(r.id) dinners, "
         "COALESCE(SUM(r.flagged::int), 0) flagged "
-        "FROM plans p LEFT JOIN recipes r ON r.plan_id = p.id "
-        "GROUP BY p.week ORDER BY p.week DESC LIMIT 8"
+        "FROM plans p LEFT JOIN recipes r ON r.plan_id = p.id WHERE p.user_id = %s "
+        "GROUP BY p.week ORDER BY p.week DESC LIMIT 8", (user_id,)
     ).fetchall()
     cost = {row["week"]: row for row in conn.execute(
         "SELECT p.week week, COALESCE(SUM(v.usd), 0) usd, "
         "SUM(CASE WHEN v.call_type = 'replace' THEN 1 ELSE 0 END) revises "
-        "FROM plans p JOIN v_llm_cost v ON v.plan_id = p.id GROUP BY p.week"
+        "FROM plans p JOIN v_llm_cost v ON v.plan_id = p.id WHERE p.user_id = %s GROUP BY p.week",
+        (user_id,),
     )}
     out = []
     for w in weeks:
@@ -197,40 +216,41 @@ def _weekly_trends(conn: psycopg.Connection) -> list[dict]:
 
 
 @router.get("/shopping", response_class=HTMLResponse)
-def shopping(request: Request, conn: Conn):
-    plan = load_latest_plan(conn)
+def shopping(request: Request, conn: Conn, user: CurrentUser):
+    plan = load_latest_plan(conn, user.id)
     return request.app.state.templates.TemplateResponse(
         request,
         "shopping.html",
-        {"title": "Shopping", "plan": plan, "shopping": _shopping_for(request, conn, plan)},
+        {"title": "Shopping", "plan": plan, "shopping": _shopping_for(request, conn, user.id, plan)},
     )
 
 
 @router.post("/plan")
-def make_plan(request: Request, use_up: Annotated[str, Form()] = ""):
+def make_plan(request: Request, user: CurrentUser, use_up: Annotated[str, Form()] = ""):
     text = use_up.strip()
-    _start_job(request, lambda conn, svc: generate_plan(
-        conn, agent=svc.agent, offers=svc.offers, nutrition=svc.nutrition,
+    _start_job(request, user.id, lambda conn, svc: generate_plan(
+        conn, user.id, agent=svc.agent, offers=svc.offers, nutrition=svc.nutrition,
         translator=svc.translator, use_up=text))
     return RedirectResponse("/", status_code=303)
 
 
 @router.post("/plan/{slot}/decline")
-def decline_dish(request: Request, conn: Conn, slot: int):
-    plan = load_latest_plan(conn)
+def decline_dish(request: Request, conn: Conn, user: CurrentUser, slot: int):
+    plan = load_latest_plan(conn, user.id)
     if plan is not None and 0 <= slot < len(plan.recipes):
         pid = plan.id
-        _start_job(request, lambda c, svc: decline(
-            c, pid, slot, agent=svc.agent, offers=svc.offers, nutrition=svc.nutrition,
+        _start_job(request, user.id, lambda c, svc: decline(
+            c, user.id, pid, slot, agent=svc.agent, offers=svc.offers, nutrition=svc.nutrition,
             translator=svc.translator),
             declining_slot=slot, declining_title=plan.recipes[slot].title)
     return RedirectResponse("/", status_code=303)
 
 
 @router.post("/plan/{slot}/rate")
-def rate_dish(request: Request, conn: Conn, slot: int, score: Annotated[int, Form()] = 0):
-    plan = load_latest_plan(conn)
+def rate_dish(request: Request, conn: Conn, user: CurrentUser, slot: int,
+              score: Annotated[int, Form()] = 0):
+    plan = load_latest_plan(conn, user.id)
     if plan is not None and 0 <= slot < len(plan.recipes):
         r = plan.recipes[slot]
-        save_rating(conn, r.title, score, [i.name for i in r.ingredients])
+        save_rating(conn, user.id, r.title, score, [i.name for i in r.ingredients])
     return RedirectResponse("/", status_code=303)

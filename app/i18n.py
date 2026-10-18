@@ -10,6 +10,8 @@ import psycopg
 UI_STRINGS: list[str] = [
     # nav / page titles (base.html) — shared with each page's `title` context value
     "This week", "Shopping", "Preferences", "Cost", "My data", "Recipes", "Week", "More",
+    # more.html (account)
+    "Account", "Sign out",
     # plan.html
     "This week's dinners", "Planning your week…",
     "No plan yet. Pick your preferences, then plan the week.",
