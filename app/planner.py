@@ -155,11 +155,11 @@ def _translate(planned: PlannedRecipe, language: str, translator: Translator) ->
 
 
 def _plan_context(
-    conn: psycopg.Connection, offers: OffersProvider, num_dinners: int,
+    conn: psycopg.Connection, user_id: int, offers: OffersProvider, num_dinners: int,
     past: list[PastDish] = (), use_up: str = "",
 ) -> PlanContext:
-    prefs = load_preferences(conn)
-    selected = selected_store_slugs(conn)
+    prefs = load_preferences(conn, user_id)
+    selected = selected_store_slugs(conn, user_id)
     offer_names = [o.name for o in offers.offers(selected)][:OFFER_PROMPT_CAP] if selected else []
     return PlanContext(
         max_kcal=prefs.max_kcal,
@@ -168,7 +168,7 @@ def _plan_context(
         servings=prefs.servings,  # dinner only — cook exactly for the household
         num_dinners=num_dinners,
         offers=offer_names,
-        preference_summary=preference_summary(conn),
+        preference_summary=preference_summary(conn, user_id),
         bans=prefs.bans,
         avoid_dishes=[p.title for p in past][:AVOID_PROMPT_CAP],
         use_up=use_up,
@@ -177,6 +177,7 @@ def _plan_context(
 
 def generate_plan(
     conn: psycopg.Connection,
+    user_id: int,
     *,
     agent: MealPlanAgent,
     offers: OffersProvider,
@@ -185,23 +186,24 @@ def generate_plan(
     num_dinners: int = 5,
     use_up: str = "",
 ) -> Plan:
-    with telemetry.session() as trace_id:
-        past = recent_avoided(conn)  # recent (non-liked) + disliked dinners to not repeat
-        ctx = _plan_context(conn, offers, num_dinners, past, use_up)
+    with telemetry.session(tenant=str(user_id)) as trace_id:
+        past = recent_avoided(conn, user_id)  # recent (non-liked) + disliked dinners to not repeat
+        ctx = _plan_context(conn, user_id, offers, num_dinners, past, use_up)
         recipes = agent.plan_week(ctx)
         if hasattr(nutrition, "warm"):  # resolve all ingredients' macros in one parallel pass
             nutrition.warm([i.name for r in recipes for i in r.ingredients])
         verified = [_verify_or_revise(r, ctx, agent, nutrition, past, conn) for r in recipes]
-        language = load_preferences(conn).language
+        language = load_preferences(conn, user_id).language
         if translator is not None and language:
             verified = [_translate(r, language, translator) for r in verified]
-        plan_id = _persist(conn, verified, use_up)
+        plan_id = _persist(conn, user_id, verified, use_up)
         telemetry.link_plan(conn, trace_id, plan_id)
     return Plan(id=plan_id, recipes=verified, use_up=use_up)
 
 
 def decline(
     conn: psycopg.Connection,
+    user_id: int,
     plan_id: int,
     slot_index: int,
     *,
@@ -211,16 +213,19 @@ def decline(
     translator: Translator | None = None,
 ) -> Plan:
     """Replace one dish with a fresh, macro-verified alternative and re-persist the plan."""
-    plan = load_plan(conn, plan_id)
-    with telemetry.session() as trace_id:
+    plan = load_plan(conn, user_id, plan_id)
+    if not 0 <= slot_index < len(plan.recipes):  # not this user's plan, or no such dish
+        raise LookupError(f"plan {plan_id} has no dish {slot_index} for this user")
+    with telemetry.session(tenant=str(user_id)) as trace_id:
         # avoid recent/disliked dinners AND the other dishes already in this plan
         siblings = [PastDish.of(r.title, [i.name for i in r.ingredients])
                     for i, r in enumerate(plan.recipes) if i != slot_index]
-        past = recent_avoided(conn) + siblings
-        ctx = _plan_context(conn, offers, num_dinners=len(plan.recipes), past=past, use_up=plan.use_up)
+        past = recent_avoided(conn, user_id) + siblings
+        ctx = _plan_context(conn, user_id, offers, num_dinners=len(plan.recipes), past=past,
+                            use_up=plan.use_up)
         declined = _to_recipe(plan.recipes[slot_index])
         replacement = _verify_or_revise(agent.replace(declined, ctx), ctx, agent, nutrition, past, conn)
-        language = load_preferences(conn).language
+        language = load_preferences(conn, user_id).language
         if translator is not None and language:
             replacement = _translate(replacement, language, translator)
         telemetry.link_plan(conn, trace_id, plan_id)
@@ -239,11 +244,13 @@ def _to_recipe(planned: PlannedRecipe) -> Recipe:
     )
 
 
-def _persist(conn: psycopg.Connection, recipes: list[PlannedRecipe], use_up: str = "") -> int:
+def _persist(conn: psycopg.Connection, user_id: int, recipes: list[PlannedRecipe],
+             use_up: str = "") -> int:
     with conn.transaction():  # a plan and all its dishes land together, or not at all
         plan_id = conn.execute(
-            "INSERT INTO plans (created_at, week, use_up) VALUES (%s, %s, %s) RETURNING id",
-            (datetime.now(UTC), iso_week(datetime.now(UTC).date()), use_up),
+            "INSERT INTO plans (user_id, created_at, week, use_up) VALUES (%s, %s, %s, %s) "
+            "RETURNING id",
+            (user_id, datetime.now(UTC), iso_week(datetime.now(UTC).date()), use_up),
         ).fetchone()["id"]
         _insert_recipes(conn, plan_id, recipes)
     return plan_id
@@ -280,16 +287,21 @@ def _rewrite_plan(conn: psycopg.Connection, plan_id: int, recipes: list[PlannedR
         _insert_recipes(conn, plan_id, recipes)
 
 
-def load_latest_plan(conn: psycopg.Connection) -> Plan | None:
-    row = conn.execute("SELECT id FROM plans ORDER BY id DESC LIMIT 1").fetchone()
+def load_latest_plan(conn: psycopg.Connection, user_id: int) -> Plan | None:
+    row = conn.execute(
+        "SELECT id FROM plans WHERE user_id = %s ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
     if row is None:
         return None
-    return load_plan(conn, row["id"])
+    return load_plan(conn, user_id, row["id"])
 
 
-def load_plan(conn: psycopg.Connection, plan_id: int) -> Plan:
-    prow = conn.execute("SELECT use_up FROM plans WHERE id = %s", (plan_id,)).fetchone()
-    use_up = prow["use_up"] if prow is not None else ""
+def load_plan(conn: psycopg.Connection, user_id: int, plan_id: int) -> Plan:
+    """The user's plan; another user's (or a missing) plan comes back empty."""
+    prow = conn.execute(
+        "SELECT use_up FROM plans WHERE id = %s AND user_id = %s", (plan_id, user_id)).fetchone()
+    if prow is None:
+        return Plan(id=plan_id, recipes=[], use_up="")
+    use_up = prow["use_up"]
     recipes = []
     for r in conn.execute(
         "SELECT * FROM recipes WHERE plan_id = %s ORDER BY slot_index", (plan_id,)

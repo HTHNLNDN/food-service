@@ -5,5 +5,9 @@
   <li><a href="/profile">{{ t("Preferences") }}</a></li>
   <li><a href="/cost">{{ t("Cost") }}</a></li>
   <li><a href="/me">{{ t("My data") }}</a></li>
+  <li><a href="/account">{{ t("Account") }}</a></li>
 </ul>
+<form method="post" action="/logout">
+  <button type="submit" class="secondary">{{ t("Sign out") }}</button>
+</form>
 {% endblock %}

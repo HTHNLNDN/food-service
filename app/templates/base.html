@@ -11,11 +11,13 @@
   <header class="site-header">
     <h1>🥗 food-service</h1>
   </header>
+  {% if request.state.user %}
   <nav class="tabbar">
     {{ nav_tab("📅", t("Week"), "/", active=(request.url.path == "/")) }}
     {{ nav_tab("🛒", t("Shopping"), "/shopping", active=(request.url.path == "/shopping")) }}
-    {{ nav_tab("⋯", t("More"), "/more", active=(request.url.path in ("/more", "/profile", "/cost", "/me"))) }}
+    {{ nav_tab("⋯", t("More"), "/more", active=(request.url.path in ("/more", "/profile", "/cost", "/me", "/account"))) }}
   </nav>
+  {% endif %}
   <main class="container">
     {% block content %}{% endblock %}
   </main>

@@ -8,6 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app import i18n, telemetry
+from app.auth import auth_middleware, parse_username_key
+from app.auth import router as auth_router
 from app.config import load_config
 from app.db import make_pool
 from app.profile import load_preferences
@@ -21,8 +23,11 @@ BASE_DIR = Path(__file__).resolve().parent
 def _i18n_context(request: Request) -> dict:
     """Injects `t(english) -> translated`, backed by the ui_translations cache (app/i18n.py).
     Falls back to English for any string not yet cached — never blocks a page render."""
+    user = getattr(request.state, "user", None)
+    if user is None:  # login page: no user yet, so no display language
+        return {"t": lambda s: s}
     with request.app.state.pool.connection() as conn:
-        strings = i18n.cached(conn, load_preferences(conn).language)
+        strings = i18n.cached(conn, load_preferences(conn, user.id).language)
     return {"t": lambda s: strings.get(s, s)}
 
 
@@ -35,6 +40,7 @@ templates = Jinja2Templates(
 async def lifespan(app: FastAPI):
     config = load_config()
     app.state.config = config
+    app.state.username_key = parse_username_key(config.username_key)  # refuse to start without it
     app.state.templates = templates
     app.state.build_services = build_services  # tests override this with fakes
     # Schema is NOT created here: `alembic upgrade head` runs before the app starts (Dockerfile).
@@ -53,10 +59,12 @@ app = FastAPI(title="food-service", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.include_router(ui_router)
 app.include_router(profile_router)
+app.include_router(auth_router)
+app.middleware("http")(auth_middleware)  # every route requires a signed-in user unless opened
 
 
 @app.exception_handler(psycopg.OperationalError)  # also PoolTimeout: DB down or unreachable
-def _database_unavailable(request: Request, exc: psycopg.OperationalError):
+def database_unavailable(request: Request, exc: psycopg.OperationalError | None):
     return HTMLResponse(
         "<h1>Database unavailable</h1><p>Try again in a moment.</p>", status_code=503
     )

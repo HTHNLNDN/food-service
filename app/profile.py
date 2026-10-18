@@ -15,6 +15,7 @@ from fastapi.responses import (
 )
 
 from app import i18n
+from app.auth import CurrentUser
 from app.bans import BAN_CATEGORIES, KNOWN_CATEGORY_IDS
 from app.db import Conn
 
@@ -58,17 +59,18 @@ class Preferences:
     language: str = ""  # display language for recipes/shopping; "" = English, no translation
 
 
-def selected_store_slugs(conn: psycopg.Connection) -> list[str]:
+def selected_store_slugs(conn: psycopg.Connection, user_id: int) -> list[str]:
     """The user's store whitelist — the single source used by offers/shopping."""
-    return [r["chain_slug"] for r in conn.execute("SELECT chain_slug FROM stores ORDER BY chain_slug")]
+    return [r["chain_slug"] for r in conn.execute(
+        "SELECT chain_slug FROM user_stores WHERE user_id = %s ORDER BY chain_slug", (user_id,))]
 
 
-def load_preferences(conn: psycopg.Connection) -> Preferences:
+def load_preferences(conn: psycopg.Connection, user_id: int) -> Preferences:
     row = conn.execute(
         "SELECT max_kcal, min_protein_g, restrictions, servings, bans, language "
-        "FROM preferences WHERE id = 1"
+        "FROM user_preferences WHERE user_id = %s", (user_id,)
     ).fetchone()
-    stores = selected_store_slugs(conn)
+    stores = selected_store_slugs(conn, user_id)
     if row is None:
         return Preferences(None, None, "", 2, stores, [], "")
     return Preferences(
@@ -77,17 +79,18 @@ def load_preferences(conn: psycopg.Connection) -> Preferences:
     )
 
 
-def save_preferences(conn: psycopg.Connection, prefs: Preferences) -> None:
+def save_preferences(conn: psycopg.Connection, user_id: int, prefs: Preferences) -> None:
     with conn.transaction():  # preferences + store whitelist change together or not at all
-        _save_preferences(conn, prefs)
+        _save_preferences(conn, user_id, prefs)
 
 
-def _save_preferences(conn: psycopg.Connection, prefs: Preferences) -> None:
+def _save_preferences(conn: psycopg.Connection, user_id: int, prefs: Preferences) -> None:
     conn.execute(
         """
-        INSERT INTO preferences (id, max_kcal, min_protein_g, restrictions, servings, bans, language)
-        VALUES (1, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT(id) DO UPDATE SET
+        INSERT INTO user_preferences
+            (user_id, max_kcal, min_protein_g, restrictions, servings, bans, language)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT(user_id) DO UPDATE SET
             max_kcal = excluded.max_kcal,
             min_protein_g = excluded.min_protein_g,
             restrictions = excluded.restrictions,
@@ -95,13 +98,13 @@ def _save_preferences(conn: psycopg.Connection, prefs: Preferences) -> None:
             bans = excluded.bans,
             language = excluded.language
         """,
-        (prefs.max_kcal, prefs.min_protein_g, prefs.restrictions, prefs.servings,
+        (user_id, prefs.max_kcal, prefs.min_protein_g, prefs.restrictions, prefs.servings,
          json.dumps(prefs.bans), prefs.language),
     )
-    conn.execute("DELETE FROM stores")
+    conn.execute("DELETE FROM user_stores WHERE user_id = %s", (user_id,))
     conn.cursor().executemany(
-        "INSERT INTO stores (chain_slug) VALUES (%s)",
-        [(s,) for s in prefs.stores if s in _CHAIN_SLUGS],
+        "INSERT INTO user_stores (user_id, chain_slug) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+        [(user_id, s) for s in prefs.stores if s in _CHAIN_SLUGS],
     )
 
 
@@ -117,28 +120,31 @@ class Rating:
     created_at: str
 
 
-def save_rating(conn: psycopg.Connection, title: str, score: int, tags: list[str]) -> None:
+def save_rating(conn: psycopg.Connection, user_id: int, title: str, score: int,
+                tags: list[str]) -> None:
     conn.execute(
-        "INSERT INTO ratings (title, score, tags, created_at) VALUES (%s, %s, %s, %s)",
-        (title, score, json.dumps(tags), datetime.now(UTC)),
+        "INSERT INTO ratings (user_id, title, score, tags, created_at) VALUES (%s, %s, %s, %s, %s)",
+        (user_id, title, score, json.dumps(tags), datetime.now(UTC)),
     )
 
 
-def rating_history(conn: psycopg.Connection) -> list[Rating]:
+def rating_history(conn: psycopg.Connection, user_id: int) -> list[Rating]:
     return [
         Rating(r["id"], r["title"], r["score"], json.loads(r["tags"]), r["created_at"].isoformat())
-        for r in conn.execute("SELECT * FROM ratings ORDER BY id DESC")
+        for r in conn.execute(
+            "SELECT * FROM ratings WHERE user_id = %s ORDER BY id DESC", (user_id,))
     ]
 
 
-def preference_summary(conn: psycopg.Connection) -> str:
+def preference_summary(conn: psycopg.Connection, user_id: int) -> str:
     """Aggregate ratings into a liked/avoid ingredient signal fed to the agent.
 
     Net score per ingredient tag across all ratings; no ML, no vector DB — just SQL-ish
     aggregation that generalizes preferences across weeks.
     """
     net: dict[str, int] = {}
-    for row in conn.execute("SELECT score, tags FROM ratings ORDER BY id"):
+    for row in conn.execute(
+            "SELECT score, tags FROM ratings WHERE user_id = %s ORDER BY id", (user_id,)):
         for tag in json.loads(row["tags"]):
             net[tag] = net.get(tag, 0) + row["score"]
     liked = [t for t, s in sorted(net.items(), key=lambda kv: -kv[1]) if s > 0][:6]
@@ -154,9 +160,10 @@ def preference_summary(conn: psycopg.Connection) -> str:
 # --- full data export (everything the app stores about the user) ---
 
 
-def export_all(conn: psycopg.Connection) -> dict:
+def export_all(conn: psycopg.Connection, user_id: int) -> dict:
     plans = []
-    for p in conn.execute("SELECT id, created_at, week FROM plans ORDER BY id"):
+    for p in conn.execute(
+            "SELECT id, created_at, week FROM plans WHERE user_id = %s ORDER BY id", (user_id,)):
         recipes = []
         for r in conn.execute(
             "SELECT * FROM recipes WHERE plan_id = %s ORDER BY slot_index", (p["id"],)
@@ -192,18 +199,18 @@ def export_all(conn: psycopg.Connection) -> dict:
         )
     ]
     return {
-        "preferences": asdict(load_preferences(conn)),
+        "preferences": asdict(load_preferences(conn, user_id)),
         "plans": plans,
-        "ratings": [asdict(r) for r in rating_history(conn)],
+        "ratings": [asdict(r) for r in rating_history(conn, user_id)],
         "missing_ingredients": missing,
     }
 
 
-def ratings_csv(conn: psycopg.Connection) -> str:
+def ratings_csv(conn: psycopg.Connection, user_id: int) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["created_at", "title", "score", "tags"])
-    for r in rating_history(conn):
+    for r in rating_history(conn, user_id):
         writer.writerow([r.created_at, r.title, r.score, ", ".join(r.tags)])
     return buf.getvalue()
 
@@ -212,8 +219,8 @@ router = APIRouter()
 
 
 @router.get("/profile", response_class=HTMLResponse)
-def profile_form(request: Request, conn: Conn, saved: bool = False):
-    prefs = load_preferences(conn)
+def profile_form(request: Request, conn: Conn, user: CurrentUser, saved: bool = False):
+    prefs = load_preferences(conn, user.id)
     custom_bans = [b for b in prefs.bans if b not in KNOWN_CATEGORY_IDS]
     return request.app.state.templates.TemplateResponse(
         request,
@@ -227,6 +234,7 @@ def profile_form(request: Request, conn: Conn, saved: bool = False):
 def profile_save(
     request: Request,
     conn: Conn,
+    user: CurrentUser,
     max_kcal: Annotated[str, Form()] = "",
     min_protein_g: Annotated[str, Form()] = "",
     restrictions: Annotated[str, Form()] = "",
@@ -243,6 +251,7 @@ def profile_save(
     language = language.strip()
     save_preferences(
         conn,
+        user.id,
         Preferences(
             max_kcal=int(max_kcal) if max_kcal.strip() else None,
             min_protein_g=int(min_protein_g) if min_protein_g.strip() else None,
@@ -262,26 +271,26 @@ def profile_save(
 
 
 @router.get("/me/export")
-def export_profile(conn: Conn):
-    return JSONResponse(asdict(load_preferences(conn)))
+def export_profile(conn: Conn, user: CurrentUser):
+    return JSONResponse(asdict(load_preferences(conn, user.id)))
 
 
 @router.get("/me", response_class=HTMLResponse)
-def my_data(request: Request, conn: Conn):
+def my_data(request: Request, conn: Conn, user: CurrentUser):
     return request.app.state.templates.TemplateResponse(
-        request, "me.html", {"title": "My data", "ratings": rating_history(conn)}
+        request, "me.html", {"title": "My data", "ratings": rating_history(conn, user.id)}
     )
 
 
 @router.get("/me/all.json")
-def export_all_json(conn: Conn):
-    return JSONResponse(export_all(conn))
+def export_all_json(conn: Conn, user: CurrentUser):
+    return JSONResponse(export_all(conn, user.id))
 
 
 @router.get("/me/ratings.csv")
-def export_ratings_csv(conn: Conn):
+def export_ratings_csv(conn: Conn, user: CurrentUser):
     return Response(
-        ratings_csv(conn),
+        ratings_csv(conn, user.id),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=ratings.csv"},
     )

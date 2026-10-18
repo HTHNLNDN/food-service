@@ -2,11 +2,12 @@ from alembic import command
 from fastapi.testclient import TestClient
 
 from app.main import app
-from tests.conftest import alembic_config
+from tests.conftest import HEAD, alembic_config, login
 
 
 def test_root_ok(db):
     with TestClient(app) as client:
+        login(client)
         resp = client.get("/")
     assert resp.status_code == 200
     assert "food-service" in resp.text
@@ -14,4 +15,4 @@ def test_root_ok(db):
 
 def test_migrations_idempotent(conn, pg_url):
     command.upgrade(alembic_config(pg_url), "head")  # already at head: must be a no-op, not an error
-    assert conn.execute("SELECT version_num FROM alembic_version").fetchone()["version_num"] == "0001"
+    assert conn.execute("SELECT version_num FROM alembic_version").fetchone()["version_num"] == HEAD

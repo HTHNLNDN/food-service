@@ -29,6 +29,7 @@ n-amount of people, grounded in current Danish grocery offers, with **determinis
 | `planner` | `app/planner.py` | assemble context → generate → verify/revise → persist |
 | `shopping` | `app/shopping.py` | cheapest-match shopping list among selected stores |
 | `ui` | `app/ui.py` + `templates/` | soft/light web UI, print view |
+| `auth` | `app/auth.py`, `app/users.py` | accounts (self sign-up), login sessions, per-user data; one-time data-claim CLI |
 
 App state lives in **PostgreSQL**: `app/db.py` provides the connection pool, and the schema lives in
 Alembic migrations under `migrations/`.
@@ -84,8 +85,14 @@ Put these in `.env` (gitignored):
 
 ```bash
 uv run uvicorn app.main:app --reload
-# open http://127.0.0.1:8000
+# open http://127.0.0.1:8000/signup and create an account with your SIGNUP_CODE
 ```
+
+Each account has its own preferences, stores, ratings, plans and shopping list. People create
+their own account with the invite code (`SIGNUP_CODE`). Sign-in lasts 90 days per device while
+it's used ("Keep me signed in"), and the forms are set up so browsers and phones offer to save
+the password. Usernames are stored only as a keyed hash (`USERNAME_KEY`) and passwords only as
+Argon2id hashes. There's **no password reset**, by design.
 
 ## Develop
 

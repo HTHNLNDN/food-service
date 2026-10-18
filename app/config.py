@@ -18,6 +18,10 @@ class Config:
     translate_base_url: str
     translate_model: str
     translate_api_key: str | None
+    # Secret key for hashing usernames (hex, >= 32 bytes). Losing or changing it locks every
+    # account out, so it's backed up with the rest of the env file. Checked at app startup.
+    username_key: str
+    signup_code: str  # invite code for creating an account; "" = sign-up closed
 
 
 def load_config() -> Config:
@@ -36,4 +40,6 @@ def load_config() -> Config:
         translate_base_url=os.environ.get("TRANSLATE_BASE_URL", ""),
         translate_model=os.environ.get("TRANSLATE_MODEL", ""),
         translate_api_key=os.environ.get("TRANSLATE_API_KEY"),
+        username_key=os.environ.get("USERNAME_KEY", ""),
+        signup_code=os.environ.get("SIGNUP_CODE", "").strip(),
     )

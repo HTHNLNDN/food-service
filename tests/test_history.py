@@ -8,13 +8,14 @@ from app.history import (
 )
 from app.nutrition import Ingredient
 from app.profile import save_rating
+from tests.conftest import TEST_USER_ID
 
 
 def _add_plan(conn, dishes):
     """dishes: list of (title, [ingredient names]). Persists one plan; returns its id."""
     plan_id = conn.execute(
-        "INSERT INTO plans (created_at, week) VALUES (%s, %s) RETURNING id",
-        (datetime.now(UTC), "2026-W01"),
+        "INSERT INTO plans (user_id, created_at, week) VALUES (%s, %s, %s) RETURNING id",
+        (TEST_USER_ID, datetime.now(UTC), "2026-W01"),
     ).fetchone()["id"]
     for slot, (title, names) in enumerate(dishes):
         recipe_id = conn.execute(
@@ -63,14 +64,14 @@ def test_not_a_repeat_when_distinct():
 
 def test_recent_neutral_dish_is_avoided(conn):
     _add_plan(conn, [("Chicken Bowl", ["chicken breast", "rice"])])
-    titles = {p.title for p in recent_avoided(conn)}
+    titles = {p.title for p in recent_avoided(conn, TEST_USER_ID)}
     assert "Chicken Bowl" in titles
 
 
 def test_liked_dish_is_not_avoided(conn):
     _add_plan(conn, [("Loved Dish", ["salmon"]), ("Meh Dish", ["pork"])])
-    save_rating(conn, "Loved Dish", 1, ["salmon"])  # 👍
-    titles = {p.title for p in recent_avoided(conn)}
+    save_rating(conn, TEST_USER_ID, "Loved Dish", 1, ["salmon"])  # 👍
+    titles = {p.title for p in recent_avoided(conn, TEST_USER_ID)}
     assert "Loved Dish" not in titles   # liked -> may return
     assert "Meh Dish" in titles         # neutral -> still on cooldown
 
@@ -79,8 +80,8 @@ def test_disliked_dish_avoided_even_beyond_window(conn):
     _add_plan(conn, [("Hated Dish", ["liver"])])       # oldest plan
     for _ in range(5):                                  # push it well past the 4-plan window
         _add_plan(conn, [("Filler", ["chicken"])])
-    save_rating(conn, "Hated Dish", -1, ["liver"])     # 👎
-    titles = {p.title for p in recent_avoided(conn, window=4)}
+    save_rating(conn, TEST_USER_ID, "Hated Dish", -1, ["liver"])     # 👎
+    titles = {p.title for p in recent_avoided(conn, TEST_USER_ID, window=4)}
     assert "Hated Dish" in titles                       # disliked -> permanent avoid
 
 
@@ -88,5 +89,5 @@ def test_neutral_dish_falls_off_after_window(conn):
     _add_plan(conn, [("Old Neutral", ["cod"])])         # oldest
     for _ in range(4):
         _add_plan(conn, [("Filler", ["chicken"])])
-    titles = {p.title for p in recent_avoided(conn, window=4)}
+    titles = {p.title for p in recent_avoided(conn, TEST_USER_ID, window=4)}
     assert "Old Neutral" not in titles                  # aged out of the cooldown window

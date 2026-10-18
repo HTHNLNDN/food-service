@@ -77,9 +77,10 @@ def is_repeat(title: str, ingredients: list[Ingredient], past: list[PastDish],
     return False
 
 
-def _title_net_scores(conn: psycopg.Connection) -> dict[str, int]:
+def _title_net_scores(conn: psycopg.Connection, user_id: int) -> dict[str, int]:
     net: dict[str, int] = {}
-    for row in conn.execute("SELECT title, score FROM ratings ORDER BY id"):
+    for row in conn.execute(
+            "SELECT title, score FROM ratings WHERE user_id = %s ORDER BY id", (user_id,)):
         nt = _norm_title(row["title"])
         net[nt] = net.get(nt, 0) + row["score"]
     return net
@@ -90,12 +91,13 @@ def _load_ingredients(conn: psycopg.Connection, recipe_id: int) -> list[str]:
         "SELECT name FROM recipe_ingredients WHERE recipe_id = %s", (recipe_id,))]
 
 
-def recent_avoided(conn: psycopg.Connection, *, window: int = RECENT_PLANS) -> list[PastDish]:
+def recent_avoided(conn: psycopg.Connection, user_id: int, *,
+                   window: int = RECENT_PLANS) -> list[PastDish]:
     """Dishes to keep off the next plan: recent (non-liked) dinners + all disliked dinners.
 
     Liked dishes are excluded entirely so they can come back. De-duplicated by title (a dish
     served several weeks contributes one entry, with its ingredients unioned)."""
-    net = _title_net_scores(conn)
+    net = _title_net_scores(conn, user_id)
     liked = {t for t, s in net.items() if s > 0}
     disliked = {t for t, s in net.items() if s < 0}
 
@@ -109,7 +111,7 @@ def recent_avoided(conn: psycopg.Connection, *, window: int = RECENT_PLANS) -> l
         dishes[nt] = PastDish(title, nt, merged)
 
     recent_ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM plans ORDER BY id DESC LIMIT %s", (window,))]
+        "SELECT id FROM plans WHERE user_id = %s ORDER BY id DESC LIMIT %s", (user_id, window))]
     if recent_ids:
         for r in conn.execute(
             "SELECT id, title FROM recipes WHERE plan_id = ANY(%s) ORDER BY id", (recent_ids,)
@@ -118,7 +120,9 @@ def recent_avoided(conn: psycopg.Connection, *, window: int = RECENT_PLANS) -> l
                 add(r["id"], r["title"])
 
     if disliked:  # disliked dishes stay avoided forever, not just within the window
-        for r in conn.execute("SELECT id, title FROM recipes ORDER BY id"):
+        for r in conn.execute(
+                "SELECT r.id, r.title FROM recipes r JOIN plans p ON p.id = r.plan_id "
+                "WHERE p.user_id = %s ORDER BY r.id", (user_id,)):
             if _norm_title(r["title"]) in disliked:
                 add(r["id"], r["title"])
 

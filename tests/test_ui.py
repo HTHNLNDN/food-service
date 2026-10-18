@@ -4,6 +4,7 @@ from app.agent import Recipe
 from app.main import app
 from app.nutrition import Ingredient, Macros
 from app.services import Services
+from tests.conftest import TEST_USER_ID, login
 
 WITHIN = Macros(100, 20, 0, 0)
 
@@ -71,6 +72,7 @@ def _set_profile(client, language=""):
 
 def test_home_shows_plan_button(db):
     with TestClient(app) as client:
+        login(client)
         resp = client.get("/")
     assert resp.status_code == 200
     assert "Plan this week" in resp.text
@@ -78,6 +80,7 @@ def test_home_shows_plan_button(db):
 
 def test_more_page_links_to_profile_cost_and_my_data(db):
     with TestClient(app) as client:
+        login(client)
         resp = client.get("/more")
     assert resp.status_code == 200
     assert 'href="/profile"' in resp.text
@@ -87,6 +90,7 @@ def test_more_page_links_to_profile_cost_and_my_data(db):
 
 def test_plan_this_week_generates_and_renders(db):
     with TestClient(app) as client:
+        login(client)
         _install_fakes(client, [_recipe("Chicken bowl", "chicken breast"),
                                 _recipe("Trout plate", "trout fillet")],
                        _recipe("Backup", "eggs"),
@@ -105,12 +109,14 @@ def test_rating_from_plan_page_persists(db):
     from app.profile import rating_history
 
     with TestClient(app) as client:
+
+        login(client)
         _install_fakes(client, [_recipe("Chicken bowl", "chicken breast")],
                        _recipe("B", "eggs"), [FakeOffer("rema", "Kylling", 20)])
         _set_profile(client)
         client.post("/plan", follow_redirects=False)
         client.post("/plan/0/rate", data={"score": "1"}, follow_redirects=False)
-        hist = rating_history(connect(db))
+        hist = rating_history(connect(db), TEST_USER_ID)
     assert len(hist) == 1
     assert hist[0].title == "Chicken bowl"
     assert hist[0].score == 1
@@ -118,6 +124,7 @@ def test_rating_from_plan_page_persists(db):
 
 def test_use_up_prefills_on_home_and_shows_already_have_in_shopping(db):
     with TestClient(app) as client:
+        login(client)
         _install_fakes(client, [_recipe("Chicken bowl", "chicken breast")],
                        _recipe("B", "eggs"), [FakeOffer("rema", "Kylling", 20)])
         _set_profile(client)
@@ -131,6 +138,7 @@ def test_use_up_prefills_on_home_and_shows_already_have_in_shopping(db):
 
 def test_shopping_view_has_offer_and_non_offer_sections(db):
     with TestClient(app) as client:
+        login(client)
         _install_fakes(
             client,
             [_recipe("Chicken dinner", "chicken breast", "rice")],
@@ -148,6 +156,7 @@ def test_shopping_view_has_offer_and_non_offer_sections(db):
 
 def test_shopping_view_groups_items_by_section(db):
     with TestClient(app) as client:
+        login(client)
         _install_fakes(
             client,
             [_recipe("Chicken dinner", "chicken breast", "broccoli")],
@@ -164,6 +173,7 @@ def test_shopping_view_groups_items_by_section(db):
 
 def test_print_page_groups_shopping_items_by_section(db):
     with TestClient(app) as client:
+        login(client)
         _install_fakes(
             client,
             [_recipe("Chicken dinner", "chicken breast", "rice")],
@@ -180,6 +190,7 @@ def test_print_page_groups_shopping_items_by_section(db):
 
 def test_print_page_includes_shopping_list_when_stores_selected(db):
     with TestClient(app) as client:
+        login(client)
         _install_fakes(
             client,
             [_recipe("Chicken dinner", "chicken breast", "rice")],
@@ -197,6 +208,7 @@ def test_print_page_includes_shopping_list_when_stores_selected(db):
 
 def test_print_page_omits_shopping_section_without_stores(db):
     with TestClient(app) as client:
+        login(client)
         _install_fakes(client, [_recipe("Chicken dinner", "chicken breast")],
                        _recipe("B", "eggs"), [])
         client.post("/profile", data={"max_kcal": "600", "min_protein_g": "5", "servings": "2"},
@@ -210,6 +222,8 @@ def test_planning_runs_in_background_then_shows_plan(db):
     import time
 
     with TestClient(app) as client:
+
+        login(client)
         _install_fakes(client, [_recipe("Async Dish", "chicken breast")], _recipe("B", "eggs"), [])
         client.app.state.plan_sync = False  # exercise the real background thread
         _set_profile(client)
@@ -229,13 +243,16 @@ def test_cost_view_renders_totals_from_seeded_prices(db):
     from app.db import connect
 
     with TestClient(app) as client:
+
+        login(client)
         empty = client.get("/cost")
         assert empty.status_code == 200
         assert "No LLM calls logged yet" in empty.text
         c = connect(db)
-        c.execute("INSERT INTO llm_calls (ts, call_type, provider, model, grounded, input_tokens, "
-                  "output_tokens, search_queries, ok) VALUES "
-                  "('2026-09-05', 'plan_week', 'gemini', 'gemini-3.6-flash', TRUE, 1000000, 1000000, 1000, TRUE)")
+        c.execute("INSERT INTO llm_calls (ts, tenant_id, call_type, provider, model, grounded, "
+                  "input_tokens, output_tokens, search_queries, ok) VALUES "
+                  "('2026-09-05', '1', 'plan_week', 'gemini', 'gemini-3.6-flash', TRUE, 1000000, "
+                  "1000000, 1000, TRUE)")  # tenant '1' = the signed-in tester
         page = client.get("/cost").text
     assert "plan_week" in page
     assert "16.8" in page  # 1M*0.30 + 1M*2.50 + 1000/1000*14 from the seeded gemini-3.6-flash price
@@ -245,8 +262,11 @@ def test_cost_view_shows_weekly_trends(db):
     from app.db import connect
 
     with TestClient(app) as client:
+
+        login(client)
         c = connect(db)
-        c.execute("INSERT INTO plans (id, created_at, week, use_up) VALUES (1, '2026-09-01', '2026-W36', '')")
+        c.execute("INSERT INTO plans (id, user_id, created_at, week, use_up) "
+                  "VALUES (1, 1, '2026-09-01', '2026-W36', '')")
         c.execute("INSERT INTO recipes (plan_id, slot_index, title, servings, steps, flagged) "
                   "VALUES (1, 0, 'A', 2, '[]', FALSE), (1, 1, 'B', 2, '[]', TRUE)")  # 1 of 2 off-target
         page = client.get("/cost").text
@@ -257,6 +277,7 @@ def test_cost_view_shows_weekly_trends(db):
 
 def test_decline_swaps_the_dish(db):
     with TestClient(app) as client:
+        login(client)
         _install_fakes(client, [_recipe("Chicken bowl", "chicken breast"),
                                 _recipe("Trout plate", "trout fillet")],
                        _recipe("Backup dinner", "eggs"),
@@ -291,6 +312,7 @@ def test_declining_one_dish_only_greys_out_that_card(conn):
 
     ready = threading.Event()
     with TestClient(app) as client:
+        login(client)
         _install_fakes(client, [_recipe("Chicken bowl", "chicken breast"),
                                 _recipe("Trout plate", "trout fillet")],
                        _recipe("Backup dinner", "eggs"),
@@ -342,6 +364,8 @@ def test_translated_content_renders_end_to_end(conn):
             return [f"[{t}]" for t in texts]  # stand-in "translation": marks each string
 
     with TestClient(app) as client:
+
+        login(client)
         def build(config, conn):
             return Services(FakeAgent([_recipe("Chicken bowl", "chicken breast")], _recipe("B", "eggs")),
                             FakeOffers([FakeOffer("rema", "Kylling", 20)]), FakeNutrition(),
@@ -370,6 +394,7 @@ def test_translated_content_renders_end_to_end(conn):
 
 def test_static_chrome_stays_english_without_a_language_configured(db):
     with TestClient(app) as client:
+        login(client)
         home = client.get("/").text
     assert "This week's dinners" not in home  # no plan yet, but nav/title chrome renders
     assert "Plan this week" in home

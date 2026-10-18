@@ -78,13 +78,19 @@ def _reset(conn):
                  "RESTART IDENTITY CASCADE")
 
 
-def _seed_history(conn, titles):
+def _eval_user(conn) -> int:
+    """A throwaway account for one sample ('!' is not a valid hash, so it can never log in)."""
+    return conn.execute("INSERT INTO users (username_hash, password_hash) VALUES ('eval', '!') "
+                        "RETURNING id").fetchone()["id"]
+
+
+def _seed_history(conn, user_id, titles):
     if not titles:
         return
     with conn.transaction():
-        pid = conn.execute("INSERT INTO plans (created_at, week, use_up) "
-                           "VALUES (%s, '2026-W01', '') RETURNING id",
-                           (datetime.now(UTC),)).fetchone()["id"]
+        pid = conn.execute("INSERT INTO plans (user_id, created_at, week, use_up) "
+                           "VALUES (%s, %s, '2026-W01', '') RETURNING id",
+                           (user_id, datetime.now(UTC))).fetchone()["id"]
         for slot, title in enumerate(titles):
             conn.execute("INSERT INTO recipes (plan_id, slot_index, title, servings, steps) "
                          "VALUES (%s, %s, %s, 2, '[]')", (pid, slot, title))
@@ -109,11 +115,12 @@ def run_scenario(config, scn, samples, build=build_services, judge=None):
 def _run_sample(config, scn, scratch, build, judge):
     with connect(scratch) as conn:
         _reset(conn)
-        save_preferences(conn, Preferences(scn.max_kcal, scn.min_protein_g, scn.restrictions,
+        user_id = _eval_user(conn)
+        save_preferences(conn, user_id, Preferences(scn.max_kcal, scn.min_protein_g, scn.restrictions,
                                            scn.servings, list(scn.stores), list(scn.bans)))
-        _seed_history(conn, scn.seed_history)
+        _seed_history(conn, user_id, scn.seed_history)
         services = build(config, conn)
-        plan = generate_plan(conn, agent=services.agent, offers=FixedOffers(scn.offers),
+        plan = generate_plan(conn, user_id, agent=services.agent, offers=FixedOffers(scn.offers),
                              nutrition=services.nutrition, num_dinners=scn.num_dinners,
                              use_up=scn.use_up)
         r = plan.recipes

@@ -51,10 +51,20 @@ class _Call:
 
 
 @contextmanager
-def session(tenant: str = "me"):
+def tenant(tenant_id: str):
+    """Attribute every call made inside the block to `tenant_id` (the signed-in user's id)."""
+    token = _tenant.set(tenant_id)
+    try:
+        yield
+    finally:
+        _tenant.reset(token)
+
+
+@contextmanager
+def session(tenant: str | None = None):
     """Group all LLM calls of one operation under a single trace id (yielded)."""
     t = _trace.set(uuid.uuid4().hex)
-    u = _tenant.set(tenant)
+    u = _tenant.set(tenant if tenant is not None else _tenant.get())  # default: inherit
     try:
         yield _trace.get()
     finally:
