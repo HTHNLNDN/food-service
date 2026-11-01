@@ -23,6 +23,7 @@ def test_export_all_contains_profile_plans_and_ratings(conn):
     assert data["plans"][0]["recipes"][0]["title"] == "Chicken bowl"
     assert data["plans"][0]["recipes"][0]["ingredients"][0]["name"] == "chicken"
     assert data["ratings"][0]["title"] == "Chicken bowl"
+    assert data["plans"][0]["recipes"][0]["source"] == ""
 
 
 def test_export_includes_translated_fields_when_present(conn):

@@ -107,8 +107,16 @@ STAPLE_ALIASES: dict[str, int] = {
     "feta": 173420, "mozzarella": 169051, "parmesan": 170848, "butter": 173410,
     # grains / carbs
     "white rice": 168879, "rice": 168879, "brown rice": 2512380, "pasta": 169736,
-    "potato": 170026, "potatoes": 170026, "sweet potato": 168482, "oats": 2346396,
+    "potato": 170026, "potatoes": 170026, "baby potatoes": 170026, "new potatoes": 170026, "sweet potato": 168482, "oats": 2346396,
     "quinoa": 168874,
+    # carb bases (dry/raw weights, like the grains above)
+    "basmati rice": 2512381, "jasmine rice": 2512381, "long grain rice": 2512381,
+    "brown basmati rice": 2512380, "bulgur": 170688, "couscous": 169699,
+    "whole wheat pasta": 169738, "egg noodles": 169731, "rice noodles": 169742,
+    "soba noodles": 168906, "farro": 2710828, "pearl barley": 170284,
+    "pita bread": 174915, "pita": 174915, "whole wheat pita": 174916, "naan": 171845,
+    "whole wheat bread": 172688, "flour tortillas": 175037, "tortillas": 175037,
+    "red lentils": 174284, "tahini": 170189,
     # vegetables
     "broccoli": 170379, "cauliflower": 169986, "carrot": 170393, "carrots": 170393,
     "onion": 170000, "onions": 170000, "garlic": 169230, "spinach": 168462,

@@ -18,14 +18,16 @@ def _r(title, kcal, protein, ings, flagged=False):
 # --- deterministic scorers ---
 
 
-def test_macro_pass_rate_counts_within_target():
+def test_macro_pass_rate_counts_within_10_percent_of_the_kcal_target():
     scn = Scenario("t", max_kcal=600, min_protein_g=40)
     recipes = [
-        _r("ok", 500, 45, [("chicken breast", 300)]),   # within
-        _r("hot", 700, 45, [("beef", 300)]),            # over kcal
-        _r("weak", 500, 30, [("tofu", 300)]),           # under protein
+        _r("low edge", 540, 45, [("chicken breast", 300)]),   # within
+        _r("high edge", 660, 45, [("pork", 300)]),            # within
+        _r("hot", 700, 45, [("beef", 300)]),                  # >10% over
+        _r("thin", 450, 45, [("turkey", 300)]),               # >10% under
+        _r("weak", 600, 30, [("tofu", 300)]),                 # under protein
     ]
-    assert scorers.macro_pass_rate(recipes, scn) == pytest.approx(1 / 3)
+    assert scorers.macro_pass_rate(recipes, scn) == pytest.approx(2 / 5)
 
 
 def test_ban_violations_flags_banned_ingredient():
@@ -48,6 +50,32 @@ def test_repetition_lower_for_distinct_than_duplicates():
              _r("b", 1, 1, [("chicken", 200), ("broccoli", 100)])]
     assert scorers.repetition(distinct) < scorers.repetition(dupes)
     assert scorers.repetition(dupes) == pytest.approx(1.0)
+
+
+def test_kcal_use_is_mean_share_of_the_ceiling():
+    scn = Scenario("t", max_kcal=600, min_protein_g=40)
+    recipes = [_r("light", 300, 40, [("chicken", 1)]), _r("full", 600, 40, [("beef", 1)])]
+    assert scorers.kcal_use(recipes, scn) == pytest.approx(0.75)
+
+
+def test_kcal_use_is_none_without_a_ceiling():
+    scn = Scenario("t", max_kcal=None)
+    assert scorers.kcal_use([_r("a", 500, 40, [("chicken", 1)])], scn) is None
+
+
+def test_protein_share_is_mean_share_of_energy_from_protein():
+    recipes = [_r("lean", 400, 50, [("chicken", 1)]), _r("normal", 600, 45, [("pork", 1)])]
+    assert scorers.protein_share(recipes) == pytest.approx((0.5 + 0.3) / 2)
+
+
+def test_carb_base_rate_counts_starch_and_legumes():
+    recipes = [
+        _r("rice", 1, 1, [("chicken thigh", 300), ("basmati rice", 150)]),
+        _r("beans", 1, 1, [("pork", 300), ("canned white beans", 200)]),
+        _r("spuds", 1, 1, [("beef", 300), ("new potatoes", 400)]),
+        _r("bare", 1, 1, [("chicken breast", 300), ("broccoli", 300), ("cauliflower rice", 300)]),
+    ]
+    assert scorers.carb_base_rate(recipes) == pytest.approx(3 / 4)  # cauliflower rice isn't rice
 
 
 # --- runner orchestration (fakes: no real LLM) ---
@@ -86,6 +114,7 @@ def test_run_scenario_produces_metrics_with_fakes(db, monkeypatch):
     assert len(rows) == 1
     m = rows[0]
     assert set(m) == {"macro_pass", "ban_violations", "flagged", "proteins", "repetition",
+                      "kcal_use", "protein_share", "carb_base",
                       "usd", "revises", "usd_per_dinner", "latency_s", "_total_usd"}
     assert m["ban_violations"] == 0
     assert 0.0 <= m["macro_pass"] <= 1.0
@@ -131,12 +160,21 @@ def test_parse_scores_pads_count_mismatch():
 
 def test_gate_passes_on_healthy_metrics():
     from evals.gate import check_gates
-    healthy = {"ban_violations": 0.0, "macro_pass": 0.91, "flagged": 0.03, "usd_per_dinner": 0.001}
+    healthy = {"ban_violations": 0.0, "macro_pass": 0.6, "flagged": 0.16, "kcal_use": 0.95,
+               "protein_share": 0.33, "carb_base": 1.0, "usd_per_dinner": 0.012}
     assert check_gates(healthy) == []
 
 
 def test_gate_fails_on_ban_violation_macro_drop_and_cost_spike():
     from evals.gate import check_gates
-    bad = {"ban_violations": 0.1, "macro_pass": 0.4, "flagged": 0.5, "usd_per_dinner": 0.05}
+    bad = {"ban_violations": 0.1, "macro_pass": 0.4, "flagged": 0.5, "kcal_use": 0.95,
+           "protein_share": 0.33, "carb_base": 1.0, "usd_per_dinner": 0.05}
     breached = {f[0] for f in check_gates(bad)}
     assert breached == {"ban_violations", "macro_pass", "flagged", "usd_per_dinner"}
+
+
+def test_gate_fails_on_the_old_boring_lean_meat_profile():
+    from evals.gate import check_gates
+    boring = {"ban_violations": 0.0, "macro_pass": 0.6, "flagged": 0.04, "kcal_use": 0.79,
+              "protein_share": 0.45, "carb_base": 0.22, "usd_per_dinner": 0.002}
+    assert {f[0] for f in check_gates(boring)} == {"kcal_use", "protein_share", "carb_base"}

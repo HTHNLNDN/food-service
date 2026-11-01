@@ -23,6 +23,8 @@ _OFFERS = ("Kyllingebryst", "Broccoli", "Laks", "Æg", "Svinemørbrad", "Squash"
 
 SCENARIOS: tuple[Scenario, ...] = (
     Scenario("baseline"),
+    # a 3-portion household with a higher protein floor and no fish or shellfish
+    Scenario("household", min_protein_g=50, servings=3, bans=("fish", "shellfish")),
     Scenario("tight_macros", max_kcal=500, min_protein_g=45),
     Scenario("no_fish", bans=("fish", "shellfish")),
     Scenario("vegan", bans=("vegan",), restrictions="vegan, high-protein"),
