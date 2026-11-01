@@ -206,18 +206,35 @@ def test_grounded_plan_week_parses_recipes():
     assert [r.title for r in recipes] == ["A", "B"]
 
 
-def test_grounded_request_uses_generatecontent_with_search_tool():
-    seen = {}
+def test_gemini_plan_searches_first_then_writes_json_without_search():
+    bodies = []
 
     def handler(req):
-        seen["url"] = str(req.url)
-        seen["body"] = json.loads(req.content)
+        bodies.append(json.loads(req.content))
+        if len(bodies) == 1:
+            return _gen_response("1. Chicken tikka masala - https://www.recipetineats.com/x")
         return _gen_response(json.dumps({"recipes": [_recipe_obj("A"), _recipe_obj("B")]}))
 
     _grounded(handler).plan_week(CTX)
-    assert seen["url"].endswith("/models/gemini-x:generateContent")
-    assert seen["body"]["tools"] == [{"google_search": {}}]
-    assert "systemInstruction" in seen["body"]
+    search, write = bodies
+    assert search["tools"] == [{"google_search": {}}]
+    assert "real" in search["contents"][0]["parts"][0]["text"].lower()
+    assert "tools" not in write                          # the JSON call doesn't search
+    assert "Chicken tikka masala" in write["contents"][0]["parts"][0]["text"]  # builds on finds
+    assert "systemInstruction" in write
+
+
+def test_gemini_plan_still_plans_when_the_search_call_fails():
+    calls = {"n": 0}
+
+    def handler(_req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(400, json={"error": "nope"})
+        return _gen_response(json.dumps({"recipes": [_recipe_obj("A")]}))
+
+    recipes = _grounded(handler).plan_week(CTX)
+    assert [r.title for r in recipes] == ["A"]
 
 
 def test_grounded_retries_on_invalid_then_succeeds():
@@ -225,12 +242,12 @@ def test_grounded_retries_on_invalid_then_succeeds():
 
     def handler(_req):
         state["n"] += 1
-        if state["n"] == 1:
+        if state["n"] == 2:  # 1 = search call, 2 = first (bad) JSON attempt
             return _gen_response("sorry, no JSON")
         return _gen_response(json.dumps({"recipes": [_recipe_obj("A"), _recipe_obj("B")]}))
 
     assert len(_grounded(handler).plan_week(CTX)) == 2
-    assert state["n"] == 2
+    assert state["n"] == 3
 
 
 def test_grounded_extracts_json_wrapped_in_prose():
@@ -245,12 +262,61 @@ def test_grounded_replace_returns_single_recipe():
     assert result.title == "New"
 
 
-def test_grounded_replace_skips_search_grounding_for_speed():
+def test_gemini_replace_skips_search_and_keeps_no_source():
     seen = {}
 
     def handler(req):
         seen["body"] = json.loads(req.content)
-        return _gen_response(json.dumps(_recipe_obj("New")))
+        return _gen_response(json.dumps({**_recipe_obj("New"), "source": "https://a.example/x"}))
 
-    _grounded(handler).replace(Recipe("Old", 4, [], []), CTX)
-    assert "tools" not in seen["body"]  # single-dish swaps skip google_search (grounded is ~3x slower)
+    recipe = _grounded(handler).replace(Recipe("Old", 4, [], []), CTX)
+    assert "tools" not in seen["body"]  # swaps and revises stay fast
+    assert recipe.source == ""          # nothing was searched, so a URL would be from memory
+
+
+def _gen_grounded(text, domains):
+    chunks = [{"web": {"uri": f"https://vertexaisearch.example/redirect/{i}", "title": d}}
+              for i, d in enumerate(domains)]
+    return httpx.Response(200, json={"candidates": [{
+        "content": {"parts": [{"text": text}]},
+        "groundingMetadata": {"webSearchQueries": ["q"], "groundingChunks": chunks},
+    }]})
+
+
+def test_grounded_keeps_a_source_only_from_a_site_it_actually_searched():
+    found = {**_recipe_obj("Real"), "source": "https://www.bbcgoodfood.com/recipes/chicken-tikka"}
+    invented = {**_recipe_obj("Made up"), "source": "https://best-recipes.example/x"}
+    body = json.dumps({"recipes": [found, invented]})
+    recipes = _grounded(lambda _r: _gen_grounded(body, ["bbcgoodfood.com"])).plan_week(CTX)
+    assert recipes[0].source == "https://www.bbcgoodfood.com/recipes/chicken-tikka"
+    assert recipes[1].source == ""  # site wasn't in this call's search results
+
+
+def test_grounded_drops_a_source_that_is_not_a_web_link():
+    obj = {**_recipe_obj("A"), "source": "javascript:alert(1)"}
+    body = json.dumps({"recipes": [obj]})
+    recipes = _grounded(lambda _r: _gen_grounded(body, ["alert(1)"])).plan_week(CTX)
+    assert recipes[0].source == ""
+
+
+def test_ungrounded_agent_never_keeps_a_source():
+    obj = {**_recipe_obj("A"), "source": "https://www.bbcgoodfood.com/recipes/a"}
+    agent = _agent(lambda _req: _completion(json.dumps({"recipes": [obj]})))
+    assert agent.plan_week(CTX)[0].source == ""  # no search, so any URL would be invented
+
+
+def test_plan_prompts_ask_to_adapt_real_recipes_under_their_real_names():
+    from app.agent import _ADAPT, _search_prompt
+
+    search = _search_prompt(CTX).lower()
+    assert "real" in search and "url" in search and "different cuisines" in search
+    assert "at most 3 searches" in search  # each query is billed
+    adapt = _ADAPT.lower()
+    assert "adapt" in adapt and "real name" in adapt and "source" in adapt
+
+
+def test_recipe_parses_cuisine_and_main_protein_labels():
+    obj = {**_recipe_obj("A"), "cuisine": "Greek", "main_protein": "Chicken"}
+    agent = _agent(lambda _req: _completion(json.dumps({"recipes": [obj]})))
+    r = agent.plan_week(CTX)[0]
+    assert (r.cuisine, r.main_protein) == ("greek", "chicken")

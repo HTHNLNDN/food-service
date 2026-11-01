@@ -451,3 +451,16 @@ def test_decline_is_blocked_when_saved_targets_are_impossible(conn):
     assert resp.status_code == 303
     assert calls == []
     assert "Chicken bowl" in home and "Backup dinner" not in home
+
+
+def test_recipe_source_is_kept_out_of_the_page(db):
+    sourced = Recipe("Chicken tikka masala", 4, [Ingredient("chicken thigh", 400)], ["Cook it."],
+                     source="https://www.bbcgoodfood.com/recipes/tikka")
+    with TestClient(app) as client:
+        login(client)
+        _install_fakes(client, [sourced], _recipe("Backup", "eggs"), [])
+        _set_profile(client)
+        client.post("/plan", follow_redirects=False)
+        home, printed = client.get("/"), client.get("/print")
+    assert "Chicken tikka masala" in home.text
+    assert "bbcgoodfood" not in home.text and "bbcgoodfood" not in printed.text  # too noisy

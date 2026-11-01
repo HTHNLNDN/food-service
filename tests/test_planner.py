@@ -171,15 +171,24 @@ def test_persistently_repeating_dish_is_flagged(conn):
 # (a _recipe is 400 g over 4 servings -> per-serving macros equal the per-100g profile)
 WITHIN = Macros(kcal=100, protein_g=20, carbs_g=0, fat_g=0)
 TOO_HOT = Macros(kcal=1000, protein_g=20, carbs_g=0, fat_g=0)
-NEAR = Macros(kcal=630, protein_g=39, carbs_g=0, fat_g=0)  # 30 kcal over, 1 g protein under
+NEAR = Macros(kcal=660, protein_g=39, carbs_g=0, fat_g=0)  # 10% over target, 1 g protein under
+OVER = Macros(kcal=661, protein_g=45, carbs_g=0, fat_g=0)  # just past 10% over target
 
 
 def test_near_miss_macros_are_accepted_within_slack(conn):
     conn = _conn(conn, max_kcal=600, min_protein=40)
     agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
     plan = generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]), nutrition=FakeNutrition(NEAR), num_dinners=1)
-    assert not plan.recipes[0].flagged   # 630 kcal / 39 g protein tolerated
+    assert not plan.recipes[0].flagged   # 660 kcal / 39 g protein tolerated
     assert agent.replace_calls == 0      # no slow revise for a near-miss
+
+
+def test_more_than_10_percent_over_the_kcal_target_is_revised(conn):
+    conn = _conn(conn, max_kcal=600, min_protein=40)
+    agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
+    generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]),
+                  nutrition=FakeNutrition(OVER), num_dinners=1)
+    assert agent.replace_calls >= 1
 
 
 class _PartialNutrition:
@@ -445,3 +454,72 @@ def test_decline_refuses_impossible_targets_and_leaves_the_plan_alone(conn):
                 nutrition=FakeNutrition(WITHIN))
     assert agent.replace_calls == 0
     assert [r.title for r in load_plan(conn, TEST_USER_ID, plan.id).recipes] == ["A"]
+
+
+def test_recipe_source_is_saved_and_survives_a_revise_and_decline(conn):
+    conn = _conn(conn)
+    sourced = Recipe("Tikka", 4, [Ingredient("stuff", 400)], ["cook"],
+                     source="https://www.bbcgoodfood.com/recipes/tikka")
+    agent = FakeAgent([sourced], Recipe("Souvlaki", 4, [Ingredient("stuff", 400)], ["cook"],
+                                        source="https://www.recipetineats.com/souvlaki"))
+    generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]),
+                  nutrition=FakeNutrition(WITHIN), num_dinners=1)
+    plan = load_latest_plan(conn, TEST_USER_ID)
+    assert plan.recipes[0].source == "https://www.bbcgoodfood.com/recipes/tikka"
+    plan = decline(conn, TEST_USER_ID, plan.id, 0, agent=agent, offers=FakeOffers([]),
+                   nutrition=FakeNutrition(WITHIN))
+    assert load_latest_plan(conn, TEST_USER_ID).recipes[0].source == \
+        "https://www.recipetineats.com/souvlaki"
+
+
+def _labelled(title, cuisine, protein, ingredient="stuff"):
+    return Recipe(title, 4, [Ingredient(ingredient, 400)], ["cook"], cuisine=cuisine,
+                  main_protein=protein)
+
+
+def test_same_cuisine_and_protein_twice_in_one_plan_is_revised(conn):
+    conn = _conn(conn)
+    agent = FakeAgent([_labelled("Chicken souvlaki", "greek", "chicken", "a"),
+                       _labelled("Chicken gyros", "greek", "chicken", "b")],
+                      replacement=_labelled("Pork carnitas", "mexican", "pork", "c"))
+    plan = generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]),
+                         nutrition=FakeNutrition(WITHIN), num_dinners=2)
+    assert [r.title for r in plan.recipes] == ["Chicken souvlaki", "Pork carnitas"]
+    assert agent.replace_calls == 1
+    assert "Chicken souvlaki (greek, chicken)" in agent.last_ctx.plan_dishes  # told what's taken
+
+
+def test_same_protein_in_a_different_cuisine_is_fine(conn):
+    conn = _conn(conn)
+    agent = FakeAgent([_labelled("Chicken souvlaki", "greek", "chicken", "a"),
+                       _labelled("Chicken tikka masala", "indian", "chicken", "b")],
+                      replacement=_labelled("R", "x", "y", "c"))
+    generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]),
+                  nutrition=FakeNutrition(WITHIN), num_dinners=2)
+    assert agent.replace_calls == 0
+
+
+def test_cuisine_and_protein_labels_are_saved_and_checked_on_decline(conn):
+    conn = _conn(conn)
+    agent = FakeAgent([_labelled("Chicken souvlaki", "greek", "chicken", "a"),
+                       _labelled("Beef chili", "mexican", "beef", "b")],
+                      replacement=_labelled("Chicken gyros", "greek", "chicken", "c"))
+    plan = generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]),
+                         nutrition=FakeNutrition(WITHIN), num_dinners=2)
+    first = load_latest_plan(conn, TEST_USER_ID).recipes[0]
+    assert (first.cuisine, first.main_protein) == ("greek", "chicken")
+    plan = decline(conn, TEST_USER_ID, plan.id, 1, agent=agent, offers=FakeOffers([]),
+                   nutrition=FakeNutrition(WITHIN))
+    assert plan.recipes[1].flagged  # every replacement clashed with the souvlaki
+
+
+def test_decline_tells_the_agent_which_dishes_are_already_in_the_plan(conn):
+    conn = _conn(conn)
+    agent = FakeAgent([_labelled("Chicken souvlaki", "greek", "chicken", "a"),
+                       _labelled("Beef chili", "mexican", "beef", "b")],
+                      replacement=_labelled("Pork ramen", "japanese", "pork", "c"))
+    plan = generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]),
+                         nutrition=FakeNutrition(WITHIN), num_dinners=2)
+    decline(conn, TEST_USER_ID, plan.id, 1, agent=agent, offers=FakeOffers([]),
+            nutrition=FakeNutrition(WITHIN))
+    assert agent.last_ctx.plan_dishes == ["Chicken souvlaki (greek, chicken)"]

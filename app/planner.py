@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 import psycopg
 
 from app import telemetry
-from app.agent import MealPlanAgent, PlanContext, Recipe
+from app.agent import KCAL_TOLERANCE, MealPlanAgent, PlanContext, Recipe
 from app.bans import violates
 from app.dates import iso_week
 from app.feasibility import IMPOSSIBLE, check_targets
@@ -24,9 +24,10 @@ from app.translate import Translator
 
 MAX_REVISIONS = 2       # bounded revise loop per dish
 OFFER_PROMPT_CAP = 40   # how many offer names to hand the agent
-# Small slack so a near-miss (e.g. 39 g vs a 40 g floor) isn't chased with a slow LLM revise —
-# the macros are estimates from a food store, not lab values. Gross misses still get revised.
-KCAL_SLACK = 40         # allow this many kcal over the ceiling
+# The kcal preference is a target, so up to KCAL_TOLERANCE (agent.py) over it is on target. Small
+# protein slack so a near-miss (39 g vs a 40 g floor) isn't chased with a slow LLM revise: the
+# macros are estimates from a food store, not lab values. Gross misses still get revised.
+# Under-target kcal is left to the prompt: revising it would add a slow LLM call per miss.
 PROTEIN_SLACK = 3       # allow this many grams under the floor
 # An unresolved ingredient this small (a spice/herb/aromatic the food store lacks) has
 # negligible macros — don't reject the whole dish over it. Bigger gaps still force a revise.
@@ -58,6 +59,9 @@ class PlannedRecipe:
     title_translated: str | None = None
     steps_translated: list[str] | None = None
     ingredient_translations: dict[str, str] | None = None  # English name -> translated name
+    source: str = ""  # URL of the real recipe it was adapted from ("" = none); stored, not shown
+    cuisine: str = ""        # agent's labels; one plan never repeats a (cuisine, protein) pair
+    main_protein: str = ""
 
 
 def is_print_compact(recipe: PlannedRecipe) -> bool:
@@ -120,15 +124,39 @@ def _log_missing(conn: psycopg.Connection, recipe: Recipe, unresolved: list[str]
 
 
 def _within_targets(per: Macros, ctx: PlanContext) -> bool:
-    over_kcal = ctx.max_kcal is not None and per.kcal > ctx.max_kcal + KCAL_SLACK
+    over_kcal = ctx.max_kcal is not None and per.kcal > ctx.max_kcal * (1 + KCAL_TOLERANCE)
     under_protein = ctx.min_protein_g is not None and per.protein_g < ctx.min_protein_g - PROTEIN_SLACK
     return not (over_kcal or under_protein)
+
+
+def _clashes(recipe: Recipe, siblings: list[PlannedRecipe]) -> bool:
+    """Same cuisine AND main protein as another dinner in this plan (e.g. two Greek chicken
+    dishes). Unlabelled dishes never clash."""
+    pair = (recipe.cuisine, recipe.main_protein)
+    return all(pair) and any((s.cuisine, s.main_protein) == pair for s in siblings)
+
+
+def _plan_dishes(siblings) -> list[str]:
+    """How the other dinners in this plan are described to the agent."""
+    return [f"{s.title} ({s.cuisine or '?'}, {s.main_protein or '?'})" for s in siblings]
+
+
+def _planned(recipe: Recipe, per: Macros, flagged: bool) -> PlannedRecipe:
+    return PlannedRecipe(recipe.title, recipe.servings, recipe.ingredients, recipe.steps, per,
+                         flagged=flagged, source=recipe.source, cuisine=recipe.cuisine,
+                         main_protein=recipe.main_protein)
 
 
 def _verify_or_revise(
     recipe: Recipe, ctx: PlanContext, agent: MealPlanAgent, source: NutritionSource,
     past: list[PastDish] = (), conn: psycopg.Connection | None = None,
+    siblings: list[PlannedRecipe] = (),
 ) -> PlannedRecipe:
+    """Accept the dish if it's on target, or ask the agent for a replacement (bounded).
+    `siblings` are the other dinners in this plan: a dish must not share their cuisine AND
+    main protein."""
+    if siblings:
+        ctx = replace(ctx, plan_dishes=_plan_dishes(siblings))
     current = recipe
     for _ in range(MAX_REVISIONS + 1):
         per, resolved, unresolved = _per_serving(current, source)
@@ -136,16 +164,15 @@ def _verify_or_revise(
             _log_missing(conn, current, unresolved)
         if (resolved and _within_targets(per, ctx)
                 and not violates(current.ingredients, ctx.bans)
-                and not is_repeat(current.title, current.ingredients, past)):
-            return PlannedRecipe(current.title, current.servings, current.ingredients,
-                                 current.steps, per, flagged=False)
+                and not is_repeat(current.title, current.ingredients, past)
+                and not _clashes(current, list(siblings))):
+            return _planned(current, per, flagged=False)
         current = agent.replace(current, ctx)
     # exhausted the revise budget — keep the last attempt but flag for human review
     per, _, unresolved = _per_serving(current, source)
     if conn is not None and unresolved:
         _log_missing(conn, current, unresolved)
-    return PlannedRecipe(current.title, current.servings, current.ingredients,
-                         current.steps, per, flagged=True)
+    return _planned(current, per, flagged=True)
 
 
 def _translate(planned: PlannedRecipe, language: str, translator: Translator) -> PlannedRecipe:
@@ -205,7 +232,9 @@ def generate_plan(
         recipes = agent.plan_week(ctx)
         if hasattr(nutrition, "warm"):  # resolve all ingredients' macros in one parallel pass
             nutrition.warm([i.name for r in recipes for i in r.ingredients])
-        verified = [_verify_or_revise(r, ctx, agent, nutrition, past, conn) for r in recipes]
+        verified: list[PlannedRecipe] = []
+        for r in recipes:  # in order, so each dish is checked against the ones already kept
+            verified.append(_verify_or_revise(r, ctx, agent, nutrition, past, conn, verified))
         language = load_preferences(conn, user_id).language
         if translator is not None and language:
             verified = [_translate(r, language, translator) for r in verified]
@@ -232,13 +261,15 @@ def decline(
         raise LookupError(f"plan {plan_id} has no dish {slot_index} for this user")
     with telemetry.session(tenant=str(user_id)) as trace_id:
         # avoid recent/disliked dinners AND the other dishes already in this plan
-        siblings = [PastDish.of(r.title, [i.name for i in r.ingredients])
-                    for i, r in enumerate(plan.recipes) if i != slot_index]
-        past = recent_avoided(conn, user_id) + siblings
+        siblings = [r for i, r in enumerate(plan.recipes) if i != slot_index]
+        past = recent_avoided(conn, user_id) + [
+            PastDish.of(r.title, [i.name for i in r.ingredients]) for r in siblings]
         ctx = _plan_context(conn, user_id, offers, num_dinners=len(plan.recipes), past=past,
                             use_up=plan.use_up)
         declined = _to_recipe(plan.recipes[slot_index])
-        replacement = _verify_or_revise(agent.replace(declined, ctx), ctx, agent, nutrition, past, conn)
+        first_ctx = replace(ctx, plan_dishes=_plan_dishes(siblings))
+        replacement = _verify_or_revise(agent.replace(declined, first_ctx), ctx, agent, nutrition, past,
+                                        conn, siblings)
         language = load_preferences(conn, user_id).language
         if translator is not None and language:
             replacement = _translate(replacement, language, translator)
@@ -255,6 +286,9 @@ def _to_recipe(planned: PlannedRecipe) -> Recipe:
         servings=planned.servings,
         ingredients=planned.ingredients,
         steps=planned.steps,
+        source=planned.source,
+        cuisine=planned.cuisine,
+        main_protein=planned.main_protein,
     )
 
 
@@ -276,13 +310,14 @@ def _insert_recipes(conn: psycopg.Connection, plan_id: int, recipes: list[Planne
             """INSERT INTO recipes
                (plan_id, slot_index, title, title_translated, servings, steps, steps_translated,
                 per_serving_kcal, per_serving_protein_g, per_serving_carbs_g, per_serving_fat_g,
-                per_serving_fibre_g, flagged)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                per_serving_fibre_g, flagged, source, cuisine, main_protein)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                RETURNING id""",
             (plan_id, slot, r.title, r.title_translated, r.servings, json.dumps(r.steps),
              json.dumps(r.steps_translated) if r.steps_translated is not None else None,
              r.per_serving.kcal, r.per_serving.protein_g, r.per_serving.carbs_g,
-             r.per_serving.fat_g, r.per_serving.fibre_g, bool(r.flagged)),
+             r.per_serving.fat_g, r.per_serving.fibre_g, bool(r.flagged), r.source,
+             r.cuisine, r.main_protein),
         ).fetchone()["id"]
         translations = r.ingredient_translations or {}
         conn.cursor().executemany(
@@ -344,6 +379,9 @@ def load_plan(conn: psycopg.Connection, user_id: int, plan_id: int) -> Plan:
                 title_translated=r["title_translated"],
                 steps_translated=json.loads(r["steps_translated"]) if r["steps_translated"] else None,
                 ingredient_translations=translations or None,
+                source=r["source"],
+                cuisine=r["cuisine"],
+                main_protein=r["main_protein"],
             )
         )
     return Plan(id=plan_id, recipes=recipes, use_up=use_up)
