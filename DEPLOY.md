@@ -35,6 +35,10 @@ cp data/usda.db /srv/food-service/usda/          # from your dev machine (scp)
 sudo chown -R 10001:10001 /srv/food-service/usda
 ```
 
+Copy it again whenever `scripts/staple_aliases.csv` changes (reload it locally with
+`build_nutrition_db.py --aliases-only` first). An older `usda.db` without the aliases still
+works, but resolves every ingredient through the LLM picker: slower and costlier.
+
 App state (plans, ratings, caches, telemetry) lives in Postgres, in the named volume
 `food-service-pgdata`.
 

@@ -453,16 +453,14 @@ def test_decline_is_blocked_when_saved_targets_are_impossible(conn):
     assert "Chicken bowl" in home and "Backup dinner" not in home
 
 
-def test_recipe_card_links_to_the_recipe_it_was_based_on(db):
+def test_recipe_source_is_kept_out_of_the_page(db):
     sourced = Recipe("Chicken tikka masala", 4, [Ingredient("chicken thigh", 400)], ["Cook it."],
                      source="https://www.bbcgoodfood.com/recipes/tikka")
     with TestClient(app) as client:
         login(client)
-        _install_fakes(client, [sourced, _recipe("Plain plate", "eggs")], _recipe("Backup", "eggs"), [])
+        _install_fakes(client, [sourced], _recipe("Backup", "eggs"), [])
         _set_profile(client)
         client.post("/plan", follow_redirects=False)
-        home = client.get("/")
-        printed = client.get("/print")
-    assert 'href="https://www.bbcgoodfood.com/recipes/tikka"' in home.text
-    assert "bbcgoodfood.com" in printed.text           # print shows the site, not a dead link
-    assert home.text.count("Based on") == 1            # only the dish that has a source
+        home, printed = client.get("/"), client.get("/print")
+    assert "Chicken tikka masala" in home.text
+    assert "bbcgoodfood" not in home.text and "bbcgoodfood" not in printed.text  # too noisy

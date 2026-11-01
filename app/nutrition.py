@@ -93,44 +93,6 @@ def _fts_query(name: str) -> str:
     return " OR ".join(f'"{tok}"' for tok in tokens)
 
 
-# Curated staples: hand-verified fdc_ids for common dinner ingredients. Pinning these
-# guarantees the right food AND skips the LLM picker (faster/cheaper). Misses fall through
-# to FTS + picker; an id absent from the store (dataset drift) also falls through.
-STAPLE_ALIASES: dict[str, int] = {
-    # proteins
-    "chicken breast": 2727569, "chicken thigh": 2727567, "ground beef": 168608,
-    "beef steak": 2727573, "pork chop": 2727575, "salmon": 173689, "cod": 171955,
-    "tuna": 173706, "shrimp": 175179, "egg": 171287, "eggs": 171287, "tofu": 172475,
-    "turkey breast": 171098,
-    # dairy
-    "greek yogurt": 330137, "milk": 171265, "cheddar cheese": 328637, "cheddar": 328637,
-    "feta": 173420, "mozzarella": 169051, "parmesan": 170848, "butter": 173410,
-    # grains / carbs
-    "white rice": 168879, "rice": 168879, "brown rice": 2512380, "pasta": 169736,
-    "potato": 170026, "potatoes": 170026, "baby potatoes": 170026, "new potatoes": 170026, "sweet potato": 168482, "oats": 2346396,
-    "quinoa": 168874,
-    # carb bases (dry/raw weights, like the grains above)
-    "basmati rice": 2512381, "jasmine rice": 2512381, "long grain rice": 2512381,
-    "brown basmati rice": 2512380, "bulgur": 170688, "couscous": 169699,
-    "whole wheat pasta": 169738, "egg noodles": 169731, "rice noodles": 169742,
-    "soba noodles": 168906, "farro": 2710828, "pearl barley": 170284,
-    "pita bread": 174915, "pita": 174915, "whole wheat pita": 174916, "naan": 171845,
-    "whole wheat bread": 172688, "flour tortillas": 175037, "tortillas": 175037,
-    "red lentils": 174284, "tahini": 170189,
-    # vegetables
-    "broccoli": 170379, "cauliflower": 169986, "carrot": 170393, "carrots": 170393,
-    "onion": 170000, "onions": 170000, "garlic": 169230, "spinach": 168462,
-    "tomato": 170457, "tomatoes": 170457, "cherry tomatoes": 170457, "cherry tomato": 170457,
-    "grape tomatoes": 170457, "baby tomatoes": 170457, "bell pepper": 2258590, "zucchini": 169291,
-    "courgette": 169291, "mushroom": 169251, "mushrooms": 169251, "cucumber": 168409,
-    "peas": 170419, "green beans": 169961, "kale": 168421, "cabbage": 169975,
-    # legumes
-    "chickpeas": 173756, "lentils": 172420, "black beans": 173734,
-    # fats / other
-    "olive oil": 171413, "avocado": 171707, "lemon": 167746,
-}
-
-
 class _LazyUsdaStore:
     """The local USDA store (scripts/build_nutrition_db.py), opened read-only on first query.
 
@@ -153,7 +115,11 @@ def open_usda_store(path: Path) -> _LazyUsdaStore:
 
 
 class LocalNutritionSource:
-    """Resolve ingredient -> (fdc_id, macros) using the local store + a candidate picker."""
+    """Resolve ingredient -> (fdc_id, macros) using the local store + a candidate picker.
+
+    Curated staples come first: the store's `aliases` table (from scripts/staple_aliases.csv)
+    pins common ingredients to hand-verified foods, so they skip the LLM picker. Misses, and an
+    alias whose food is missing, fall through to FTS + picker."""
 
     def __init__(
         self,
@@ -161,18 +127,16 @@ class LocalNutritionSource:
         cache: psycopg.Connection,  # app DB: resolve_cache
         picker: CandidatePicker,
         candidate_limit: int = 20,
-        aliases: dict[str, int] | None = None,
     ):
         self.store = store
         self.cache = cache
         self.picker = picker
         self.candidate_limit = candidate_limit
-        self.aliases = STAPLE_ALIASES if aliases is None else aliases
 
     def lookup(self, name: str) -> tuple[int, Macros] | None:
         key = name.strip().lower()
 
-        alias = self.aliases.get(key)  # curated staples: exact, verified, no LLM call
+        alias = self._alias(key)  # curated staples: exact, verified, no LLM call
         if alias is not None:
             found = self._macros(alias)
             if found is not None:
@@ -202,7 +166,8 @@ class LocalNutritionSource:
             if key in seen:
                 continue
             seen.add(key)
-            if self.aliases.get(key) is not None and self._macros(self.aliases[key]) is not None:
+            alias = self._alias(key)
+            if alias is not None and self._macros(alias) is not None:
                 continue  # curated alias, no pick needed
             if self._cached_fdc_id(key) is not _MISS:
                 continue  # already resolved (or a cached miss)
@@ -218,6 +183,13 @@ class LocalNutritionSource:
         for (_name, key, candidates), chosen in zip(todo, picks):
             valid = chosen if any(c.fdc_id == chosen for c in candidates) else None
             self._remember(key, valid)
+
+    def _alias(self, key: str) -> int | None:
+        try:
+            row = self.store.execute("SELECT fdc_id FROM aliases WHERE name = ?", (key,)).fetchone()
+        except sqlite3.OperationalError:  # a store built before the aliases table: no aliases
+            return None
+        return row[0] if row else None
 
     def _search(self, name: str) -> list[Candidate]:
         query = _fts_query(name)

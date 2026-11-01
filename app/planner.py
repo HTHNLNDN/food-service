@@ -8,7 +8,6 @@ The agent is untrusted for numbers — every recipe's per-serving macros are rec
 import json
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
 
 import psycopg
 
@@ -60,14 +59,9 @@ class PlannedRecipe:
     title_translated: str | None = None
     steps_translated: list[str] | None = None
     ingredient_translations: dict[str, str] | None = None  # English name -> translated name
-    source: str = ""  # URL of the real recipe it was adapted from ("" = none)
+    source: str = ""  # URL of the real recipe it was adapted from ("" = none); stored, not shown
     cuisine: str = ""        # agent's labels; one plan never repeats a (cuisine, protein) pair
     main_protein: str = ""
-
-    @property
-    def source_site(self) -> str:
-        """The source's site, for display ("bbcgoodfood.com")."""
-        return (urlsplit(self.source).hostname or "").removeprefix("www.")
 
 
 def is_print_compact(recipe: PlannedRecipe) -> bool:

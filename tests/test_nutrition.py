@@ -61,7 +61,8 @@ class FakePicker:
         return self.choice
 
 
-def _store():
+def _store(aliases: dict[str, int] | None = None):
+    """An in-memory USDA store. `aliases=None` mimics a store built before the aliases table."""
     s = sqlite3.connect(":memory:")
     s.executescript(
         "CREATE TABLE foods (fdc_id INTEGER PRIMARY KEY, description TEXT, data_type TEXT, "
@@ -74,6 +75,9 @@ def _store():
         (3, "Broccoli, raw", "foundation_food", 34, 2.8, 7, 0.4, 2.6),
     ])
     s.execute("INSERT INTO foods_fts(rowid, description) SELECT fdc_id, description FROM foods")
+    if aliases is not None:
+        s.execute("CREATE TABLE aliases (name TEXT PRIMARY KEY, fdc_id INTEGER NOT NULL)")
+        s.executemany("INSERT INTO aliases VALUES (?, ?)", aliases.items())
     s.commit()
     return s
 
@@ -108,7 +112,7 @@ def test_local_lookup_rejects_fdc_id_not_among_candidates(conn):
 
 def test_local_lookup_caches_and_skips_picker_on_repeat(conn):
     picker = FakePicker(2)
-    src = LocalNutritionSource(_store(), conn, picker, aliases={})
+    src = LocalNutritionSource(_store({}), conn, picker)
     src.lookup("salmon")
     src.lookup("salmon")
     assert picker.calls == 1
@@ -116,7 +120,7 @@ def test_local_lookup_caches_and_skips_picker_on_repeat(conn):
 
 def test_curated_alias_pins_food_and_skips_picker(conn):
     picker = FakePicker(1)  # would wrongly pick the oil
-    src = LocalNutritionSource(_store(), conn, picker, aliases={"salmon": 2})
+    src = LocalNutritionSource(_store({"salmon": 2}), conn, picker)
     found = src.lookup("salmon")
     assert found is not None and found[0] == 2  # the pinned raw flesh
     assert picker.calls == 0  # alias short-circuits the LLM
@@ -124,7 +128,7 @@ def test_curated_alias_pins_food_and_skips_picker(conn):
 
 def test_warm_prepopulates_cache_so_lookups_skip_the_picker(conn):
     picker = FakePicker(2)
-    src = LocalNutritionSource(_store(), conn, picker, aliases={})
+    src = LocalNutritionSource(_store({}), conn, picker)
     src.warm(["salmon", "broccoli", "salmon"])  # dedupes -> one pick per unique uncached name
     assert picker.calls == 2
     src.lookup("salmon")
@@ -134,10 +138,62 @@ def test_warm_prepopulates_cache_so_lookups_skip_the_picker(conn):
 
 def test_alias_with_unknown_fdc_falls_through_to_picker(conn):
     picker = FakePicker(3)
-    src = LocalNutritionSource(_store(), conn, picker, aliases={"broccoli": 99999})
+    src = LocalNutritionSource(_store({"broccoli": 99999}), conn, picker)
     found = src.lookup("broccoli")
     assert found is not None and found[0] == 3  # 99999 not in store -> picker used
     assert picker.calls == 1
+
+
+def test_alias_matches_case_and_whitespace_insensitively(conn):
+    picker = FakePicker(1)
+    src = LocalNutritionSource(_store({"salmon": 2}), conn, picker)
+    assert src.lookup("  Salmon ")[0] == 2
+    assert picker.calls == 0
+
+
+def test_store_built_before_the_aliases_table_still_resolves(conn):
+    picker = FakePicker(2)
+    src = LocalNutritionSource(_store(aliases=None), conn, picker)  # an older usda.db
+    assert src.lookup("salmon")[0] == 2  # falls through to search + picker
+    src.warm(["broccoli"])
+    assert picker.calls == 2
+
+
+# --- building the aliases table (scripts/build_nutrition_db.py) ---
+
+
+def test_load_aliases_writes_the_curated_csv_into_the_store(tmp_path):
+    from scripts.build_nutrition_db import load_aliases
+
+    csv_path = tmp_path / "aliases.csv"
+    csv_path.write_text("name,fdc_id\nSalmon ,2\nbroccoli,3\n")
+    store = _store(aliases=None)
+    assert load_aliases(store, csv_path) == 2
+    rows = dict(store.execute("SELECT name, fdc_id FROM aliases"))
+    assert rows == {"salmon": 2, "broccoli": 3}  # names normalized like lookups
+    assert load_aliases(store, csv_path) == 2       # re-runnable (--aliases-only)
+
+
+def test_load_aliases_refuses_unknown_or_zero_macro_foods(tmp_path):
+    from scripts.build_nutrition_db import load_aliases
+
+    store = _store(aliases=None)
+    store.execute("INSERT INTO foods VALUES (4, 'Pasta, dry', 'foundation_food', 0, 0, 0, 0, 0)")
+    csv_path = tmp_path / "aliases.csv"
+    csv_path.write_text("name,fdc_id\nsalmon,2\nunicorn,99999\npasta,4\n")
+    with pytest.raises(ValueError, match="unicorn.*99999.*pasta.*4"):
+        load_aliases(store, csv_path)
+
+
+def test_the_shipped_alias_list_is_well_formed():
+    import csv
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "staple_aliases.csv"
+    rows = list(csv.DictReader(path.open()))
+    names = [r["name"] for r in rows]
+    assert len(rows) > 50 and len(names) == len(set(names))
+    assert all(n == n.strip().lower() and r["fdc_id"].isdigit() for n, r in zip(names, rows))
 
 
 # --- LLMCandidatePicker (mocked httpx) ---

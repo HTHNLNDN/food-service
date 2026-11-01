@@ -4,11 +4,16 @@ The FDC CSV zips are NOT committed — drop them in ./usda/ (Foundation + SR Leg
 https://fdc.nal.usda.gov/download-datasets), then run:
 
     PYTHONPATH=. uv run python scripts/build_nutrition_db.py
+    PYTHONPATH=. uv run python scripts/build_nutrition_db.py --aliases-only  # reload aliases
 
 Produces a small, offline, deterministic store of raw/generic foods with per-100 g
-kcal / protein / carbs / fat / fibre, plus an FTS5 index over descriptions.
+kcal / protein / carbs / fat / fibre, an FTS5 index over descriptions, and an `aliases` table:
+common ingredient names pinned to hand-verified foods (from staple_aliases.csv next to this
+script), so the app resolves them without asking an LLM. `--aliases-only` reloads just that
+table into an existing store, e.g. after editing the CSV; copy the store to the server after.
 """
 
+import argparse
 import csv
 import io
 import sqlite3
@@ -18,6 +23,7 @@ from pathlib import Path
 
 USDA_DIR = Path("usda")
 OUT_PATH = Path("data/usda.db")
+ALIASES_CSV = Path(__file__).resolve().parent / "staple_aliases.csv"
 
 # Keep only real curated foods — not the raw sample/acquisition records the Foundation zip
 # also ships (those have no computed macros and only add noise).
@@ -73,7 +79,39 @@ def _load_zip(zip_path: Path) -> dict:
     return foods
 
 
+def load_aliases(conn: sqlite3.Connection, csv_path: Path = ALIASES_CSV) -> int:
+    """(Re)write the `aliases` table from the curated CSV (name,fdc_id). Refuses, writing
+    nothing, if any alias points at a food missing from this store or with zero kcal: some
+    USDA records carry no macros at all, and an alias to one would silently count as 0."""
+    with csv_path.open(newline="") as fh:
+        rows = [(r["name"].strip().lower(), int(r["fdc_id"])) for r in csv.DictReader(fh)]
+    bad = []
+    for name, fdc_id in rows:
+        food = conn.execute("SELECT kcal FROM foods WHERE fdc_id = ?", (fdc_id,)).fetchone()
+        if food is None or food[0] <= 0:
+            bad.append(f"{name} -> {fdc_id}")
+    if bad:
+        raise ValueError("aliases point at missing or zero-macro foods: " + ", ".join(bad))
+    with conn:
+        conn.execute("DROP TABLE IF EXISTS aliases")
+        conn.execute("CREATE TABLE aliases (name TEXT PRIMARY KEY, fdc_id INTEGER NOT NULL)")
+        conn.executemany("INSERT INTO aliases VALUES (?, ?)", rows)
+    return len(rows)
+
+
 def main() -> None:
+    ap = argparse.ArgumentParser(description="Build the local USDA nutrition store.")
+    ap.add_argument("--aliases-only", action="store_true",
+                    help=f"only reload the aliases table into an existing {OUT_PATH}")
+    args = ap.parse_args()
+    if args.aliases_only:
+        if not OUT_PATH.exists():
+            sys.exit(f"No store at {OUT_PATH}: build it first (without --aliases-only).")
+        conn = sqlite3.connect(OUT_PATH)
+        print(f"loaded {load_aliases(conn)} aliases into {OUT_PATH}")
+        conn.close()
+        return
+
     zips = sorted(USDA_DIR.glob("*.zip"))
     if not zips:
         sys.exit(f"No FDC zips in {USDA_DIR}/ — download Foundation + SR Legacy first.")
@@ -102,8 +140,9 @@ def main() -> None:
 
     conn.execute("INSERT INTO foods_fts(rowid, description) SELECT fdc_id, description FROM foods")
     conn.commit()
+    aliases = load_aliases(conn)
     conn.close()
-    print(f"built {OUT_PATH} with {total} foods")
+    print(f"built {OUT_PATH} with {total} foods and {aliases} aliases")
 
 
 if __name__ == "__main__":

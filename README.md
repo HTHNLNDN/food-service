@@ -71,6 +71,9 @@ PYTHONPATH=. uv run python scripts/build_nutrition_db.py   # builds data/usda.db
 
 Ingredient→food resolution uses FTS5 + an LLM that picks *which* food (the macro numbers
 always come from the store, never the model), so it's deterministic and reproducible.
+Common ingredients skip the LLM: `scripts/staple_aliases.csv` pins them to hand-checked foods,
+and the build loads it into the store. After editing the CSV, reload just that part with
+`PYTHONPATH=. uv run python scripts/build_nutrition_db.py --aliases-only`.
 
 ### API keys (all free tiers)
 
