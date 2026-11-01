@@ -27,6 +27,8 @@
     {{ r.per_serving.fat_g | round | int }} g fat
     <span class="muted">/ serving ({{ r.servings }} servings cooked)</span>
   </p>
+  {% if r.source %}<p class="source muted">{{ t("Based on") }}
+    <a href="{{ r.source }}" target="_blank" rel="noopener noreferrer">{{ r.source_site }}</a></p>{% endif %}
   <details>
     <summary>{{ t("Ingredients & steps") }}</summary>
     <ul class="ingredients">

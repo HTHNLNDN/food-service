@@ -38,9 +38,10 @@ from evals.models import candidates
 from evals.scenarios import SCENARIOS
 
 _BASE_METRICS = ["macro_pass", "ban_violations", "flagged", "proteins", "repetition",
-                 "usd", "revises", "usd_per_dinner", "latency_s"]
+                 "kcal_use", "protein_share", "carb_base", "usd", "revises", "usd_per_dinner", "latency_s"]
 _LABELS = {"macro_pass": "macro_pass", "ban_violations": "bans", "flagged": "flagged",
-           "proteins": "proteins", "repetition": "repetition", "usd": "usd",
+           "proteins": "proteins", "repetition": "repetition", "kcal_use": "kcal_use",
+           "protein_share": "prot_share", "carb_base": "carb_base", "usd": "usd",
            "revises": "revises", "usd_per_dinner": "$/dinner", "latency_s": "latency_s",
            "appeal": "appeal", "realism": "realism", "effort": "effort"}
 
@@ -138,6 +139,9 @@ def _run_sample(config, scn, scratch, build, judge):
             "flagged": scorers.flagged_rate(r),
             "proteins": scorers.distinct_proteins(r),
             "repetition": scorers.repetition(r),
+            "kcal_use": scorers.kcal_use(r, scn),
+            "protein_share": scorers.protein_share(r),
+            "carb_base": scorers.carb_base_rate(r),
             "usd": usd,
             "revises": revises,
             "usd_per_dinner": usd / dinners,
@@ -153,7 +157,9 @@ def _run_sample(config, scn, scratch, build, judge):
 
 
 def _mean(rows, key):
-    return sum(row[key] for row in rows) / len(rows) if rows else 0.0
+    """Mean over the samples that have a value (kcal_use is None without a kcal target)."""
+    vals = [row[key] for row in rows if row.get(key) is not None]
+    return sum(vals) / len(vals) if vals else 0.0
 
 
 def _build_for(cand):

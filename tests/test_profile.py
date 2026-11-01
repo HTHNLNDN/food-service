@@ -279,3 +279,12 @@ def test_kept_targets_show_a_calm_notice_not_an_error(db):
         html = client.get("/profile").text
         assert 'class="notice targets-check"' in html
         assert 'class="error targets-check"' not in html
+
+
+def test_calorie_field_reads_as_a_target_not_a_maximum(db):
+    with TestClient(app) as client:
+        login(client)
+        page = client.get("/profile").text
+    assert "Calories per serving" in page
+    assert "Max calories" not in page
+    assert "give or take 10%" in page

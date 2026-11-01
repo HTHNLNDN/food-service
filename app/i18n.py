@@ -23,7 +23,7 @@ UI_STRINGS: list[str] = [
     "Writing recipes and checking macros against your targets — this can take a minute or two.",
     "Macros could not be verified within targets", "off-target", "Ingredients & steps",
     "Like — more like this", "Dislike — avoid this", "Decline & replace",
-    "Finding a replacement…", "Weekday schedule", "Day", "Dinner", "View shopping list",
+    "Finding a replacement…", "Based on", "Weekday schedule", "Day", "Dinner", "View shopping list",
     # shopping.html
     "No plan yet.", "Plan your week", "first — your shopping list will appear here.",
     "Choose the stores you shop at in", "to build a shopping list.", "On offer",

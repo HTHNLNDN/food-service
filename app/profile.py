@@ -189,6 +189,9 @@ def export_all(conn: psycopg.Connection, user_id: int) -> dict:
                     "fibre_g": r["per_serving_fibre_g"],
                 },
                 "flagged": bool(r["flagged"]),
+                "source": r["source"],
+                "cuisine": r["cuisine"],
+                "main_protein": r["main_protein"],
                 "ingredients": ingredients,
             })
         plans.append({"id": p["id"], "created_at": p["created_at"].isoformat(), "week": p["week"],

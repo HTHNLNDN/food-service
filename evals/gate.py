@@ -20,14 +20,21 @@ from app.config import load_config
 from evals.run import _mean, run_scenario
 from evals.scenarios import SCENARIOS
 
-_CORE = ("baseline", "tight_macros", "no_fish", "vegan")
+_CORE = ("baseline", "household", "tight_macros", "no_fish", "vegan")
 
 # (metric, op, threshold) — a change must not breach these.
+# Measured 2026-11-01 on the core scenarios (gemini-3.6-flash, capped recipe search):
+# macro_pass 0.60, flagged 0.16, kcal_use 0.95, protein_share 0.33, carb_base 1.0, $0.012/dinner.
 GATES = [
-    ("ban_violations", "<=", 0.0),   # hard: a banned ingredient must never survive
-    ("macro_pass", ">=", 0.80),      # most dinners on-target
-    ("flagged", "<=", 0.20),         # few off-target/unresolvable dishes
-    ("usd_per_dinner", "<=", 0.010),  # ~10x headroom over the $0.001 baseline
+    ("ban_violations", "<=", 0.0),    # hard: a banned ingredient must never survive
+    # within ±10% of the kcal target AND the protein floor. Two-sided since 2026-11 (it used to
+    # only check a ceiling, where 0.80 was the bar); under-target misses are the main gap.
+    ("macro_pass", ">=", 0.55),
+    ("flagged", "<=", 0.20),          # few off-target/unresolvable dishes
+    ("kcal_use", ">=", 0.85),         # dinners use the calorie target (old prompt: 0.79)
+    ("protein_share", "<=", 0.40),    # not lean meat + greens (old prompt: 0.45)
+    ("carb_base", ">=", 0.80),        # a filling carb base most nights (old prompt: 0.22)
+    ("usd_per_dinner", "<=", 0.020),  # the recipe search adds ~$0.01/dinner; ~2x headroom
 ]
 
 
@@ -55,7 +62,8 @@ def main() -> None:
     for scn in scns:
         rows.extend(run_scenario(config, scn, args.samples))
     means = {m: _mean(rows, m) for m in
-             ("macro_pass", "ban_violations", "flagged", "proteins", "repetition", "usd_per_dinner")}
+             ("macro_pass", "ban_violations", "flagged", "proteins", "repetition", "kcal_use",
+              "protein_share", "carb_base", "usd_per_dinner")}
     for m, v in means.items():
         print(f"  {m:16} {v:.3f}")
 

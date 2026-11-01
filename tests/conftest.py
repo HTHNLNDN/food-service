@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # Points at nothing (port 1): a test that touches the DB without the `db` fixture fails fast
 # instead of reaching a DATABASE_URL loaded from a developer's .env (load_dotenv never overrides).
 _NO_DB = "postgresql://no-db-fixture@127.0.0.1:1/none"
-HEAD = "0002"  # latest migration revision
+HEAD = "0003"  # latest migration revision
 
 # Every clean test DB has this account (id 1, thanks to RESTART IDENTITY); `login()` signs in as it.
 TEST_USER_ID = 1
