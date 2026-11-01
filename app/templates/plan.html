@@ -15,6 +15,7 @@
   <div class="head-actions">
     {% if plan %}<a class="link" href="/shopping">🛒 {{ t("Shopping list") }}</a>
     <a class="link" href="/print">🖨 {{ t("Print recipes") }}</a>{% endif %}
+    {% if not targets_blocked %}
     <form method="post" action="/plan" onsubmit="showBusy()" class="plan-form">
       <label class="use-up">{{ t("Using up any ingredients this week?") }} <span class="muted">{{ t("(optional)") }}</span>
         <input type="text" name="use_up" value="{{ plan.use_up if plan else '' }}"
@@ -22,10 +23,17 @@
       </label>
       {{ button(t("Re-plan this week") if plan else t("Plan this week")) }}
     </form>
+    {% endif %}
   </div>
 </div>
 
 {% if error %}<p class="error">⚠ {{ error }}</p>{% endif %}
+{% if targets_blocked %}
+<div class="error" role="alert">
+  <p>{{ targets_blocked.reason }}</p>
+  <p><a href="/profile">Update your targets in Preferences</a> to start planning.</p>
+</div>
+{% endif %}
 
 <div id="busy" class="busy">
   <div>

@@ -9,8 +9,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from app.auth import CurrentUser
 from app.dates import iso_week
 from app.db import Conn
+from app.feasibility import IMPOSSIBLE, check_targets
 from app.planner import decline, generate_plan, is_print_compact, load_latest_plan, weekday_meals
-from app.profile import save_rating, selected_store_slugs
+from app.profile import load_preferences, save_rating, selected_store_slugs
 from app.shopping import build_shopping_list
 
 router = APIRouter()
@@ -105,6 +106,13 @@ def _still_declining(plan, slot: int | None, title: str | None) -> int | None:
     return slot if plan.recipes[slot].title == title else None
 
 
+def _blocked_targets(conn: psycopg.Connection, user_id: int):
+    """The safe-stop verdict if the saved targets make planning impossible, else None."""
+    prefs = load_preferences(conn, user_id)
+    verdict = check_targets(prefs.max_kcal, prefs.min_protein_g)
+    return verdict if verdict.level == IMPOSSIBLE else None
+
+
 def _render_home(request: Request, conn: psycopg.Connection, user_id: int):
     state = plan_state(user_id)
     running, error = state["running"], state["error"]
@@ -124,6 +132,7 @@ def _render_home(request: Request, conn: psycopg.Connection, user_id: int):
             "planning": running and declining_slot is None,
             "declining_slot": busy_slot,
             "error": error,
+            "targets_blocked": _blocked_targets(conn, user_id),
         },
     )
 
@@ -226,7 +235,9 @@ def shopping(request: Request, conn: Conn, user: CurrentUser):
 
 
 @router.post("/plan")
-def make_plan(request: Request, user: CurrentUser, use_up: Annotated[str, Form()] = ""):
+def make_plan(request: Request, conn: Conn, user: CurrentUser, use_up: Annotated[str, Form()] = ""):
+    if _blocked_targets(conn, user.id):
+        return RedirectResponse("/", status_code=303)  # the page explains why
     text = use_up.strip()
     _start_job(request, user.id, lambda conn, svc: generate_plan(
         conn, user.id, agent=svc.agent, offers=svc.offers, nutrition=svc.nutrition,
@@ -236,6 +247,8 @@ def make_plan(request: Request, user: CurrentUser, use_up: Annotated[str, Form()
 
 @router.post("/plan/{slot}/decline")
 def decline_dish(request: Request, conn: Conn, user: CurrentUser, slot: int):
+    if _blocked_targets(conn, user.id):
+        return RedirectResponse("/", status_code=303)
     plan = load_latest_plan(conn, user.id)
     if plan is not None and 0 <= slot < len(plan.recipes):
         pid = plan.id

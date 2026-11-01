@@ -168,3 +168,114 @@ def test_custom_bans_render_as_removable_chips(db):
         html = client.get("/profile").text
     assert 'value="mushrooms"' in html   # custom ban is a (checked) chip
     assert 'value="fish"' in html         # category chips present
+
+
+# --- safe stops on Preferences ---
+
+
+def _post_targets(client, kcal, protein, **extra):
+    data = {"max_kcal": kcal, "min_protein_g": protein, "servings": "2", "stores": ["rema"],
+            **extra}
+    return client.post("/profile", data=data, follow_redirects=False)
+
+
+def _saved(client):
+    body = client.get("/me/export").json()
+    return body["max_kcal"], body["min_protein_g"]
+
+
+def test_below_the_calorie_floor_is_never_saved(db):
+    with TestClient(app) as client:
+        login(client)
+        for extra in ({}, {"targets_choice": "keep"}):  # not even when forced
+            resp = _post_targets(client, "299", "", **extra)
+            assert resp.status_code == 422
+            assert "300 kcal" in resp.text and "400 kcal" in resp.text
+        assert _saved(client) == (None, None)
+
+
+def test_impossible_combination_is_refused_even_with_keep(db):
+    with TestClient(app) as client:
+        login(client)
+        resp = _post_targets(client, "100", "40", targets_choice="keep")
+        assert resp.status_code == 422 and "160 kcal" in resp.text
+        assert 'value="keep"' not in resp.text  # no "keep mine" for impossible
+        assert _saved(client) == (None, None)
+
+
+def test_unrealistic_needs_a_choice_and_offers_two_alternatives(db):
+    with TestClient(app) as client:
+        login(client)
+        resp = _post_targets(client, "400", "50")
+        assert resp.status_code == 422
+        assert 'value="700/50"' in resp.text and 'value="400/30"' in resp.text
+        assert 'value="keep"' in resp.text
+        assert _saved(client) == (None, None)
+
+
+def test_choosing_an_alternative_saves_it(db):
+    with TestClient(app) as client:
+        login(client)
+        resp = _post_targets(client, "400", "50", targets_choice="700/50")
+        assert resp.status_code == 303
+        assert _saved(client) == (700, 50)
+
+
+def test_keep_mine_saves_unrealistic_targets(db):
+    with TestClient(app) as client:
+        login(client)
+        assert _post_targets(client, "400", "50", targets_choice="keep").status_code == 303
+        assert _saved(client) == (400, 50)
+        assert _post_targets(client, "300", "", targets_choice="keep").status_code == 303
+        assert _saved(client) == (300, None)  # 300 itself is allowed
+
+
+def test_a_forged_choice_cannot_sneak_past_the_floor(db):
+    with TestClient(app) as client:
+        login(client)
+        resp = _post_targets(client, "400", "50", targets_choice="200/10")
+        assert resp.status_code == 422
+        assert _saved(client) == (None, None)
+
+
+def test_ambitious_saves_and_shows_a_note(db):
+    with TestClient(app) as client:
+        login(client)
+        assert _post_targets(client, "400", "38").status_code == 303
+        assert _saved(client) == (400, 38)
+        assert "Protein-heavy" in client.get("/profile").text
+
+
+def test_rejected_form_keeps_the_other_fields(db):
+    with TestClient(app) as client:
+        login(client)
+        resp = _post_targets(client, "400", "50", restrictions="no spicy food")
+        assert 'value="no spicy food"' in resp.text
+
+
+def test_kept_targets_are_not_rechallenged_on_later_saves(db):
+    with TestClient(app) as client:
+        login(client)
+        assert _post_targets(client, "400", "50", targets_choice="keep").status_code == 303
+        data = {"max_kcal": "400", "min_protein_g": "50", "servings": "2", "stores": ["netto"]}
+        resp = client.post("/profile", data=data, follow_redirects=False)
+        assert resp.status_code == 303
+        assert _saved(client) == (400, 50)
+        assert client.get("/me/export").json()["stores"] == ["netto"]
+
+
+def test_a_different_unrealistic_pair_still_needs_a_choice(db):
+    with TestClient(app) as client:
+        login(client)
+        assert _post_targets(client, "400", "50", targets_choice="keep").status_code == 303
+        assert _post_targets(client, "400", "45").status_code == 422
+        assert _saved(client) == (400, 50)
+
+
+def test_kept_targets_show_a_calm_notice_not_an_error(db):
+    with TestClient(app) as client:
+        login(client)
+        assert _post_targets(client, "400", "50", targets_choice="keep").status_code == 303
+        html = client.get("/profile").text
+        assert 'class="notice targets-check"' in html
+        assert 'class="error targets-check"' not in html
