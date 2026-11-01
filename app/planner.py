@@ -15,6 +15,7 @@ from app import telemetry
 from app.agent import MealPlanAgent, PlanContext, Recipe
 from app.bans import violates
 from app.dates import iso_week
+from app.feasibility import IMPOSSIBLE, check_targets
 from app.history import AVOID_PROMPT_CAP, PastDish, is_repeat, recent_avoided
 from app.nutrition import Ingredient, Macros, NutritionSource, macros_for
 from app.offers import OffersProvider
@@ -31,6 +32,17 @@ PROTEIN_SLACK = 3       # allow this many grams under the floor
 # negligible macros — don't reject the whole dish over it. Bigger gaps still force a revise.
 UNRESOLVED_GRAMS = 40
 _WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+
+class InfeasibleTargets(Exception):
+    """The saved targets can't be met by any real dinner. Raised before any LLM call."""
+
+
+def _ensure_feasible(conn: psycopg.Connection, user_id: int) -> None:
+    prefs = load_preferences(conn, user_id)
+    verdict = check_targets(prefs.max_kcal, prefs.min_protein_g)
+    if verdict.level == IMPOSSIBLE:
+        raise InfeasibleTargets(verdict.reason)
 
 
 @dataclass(frozen=True)
@@ -186,6 +198,7 @@ def generate_plan(
     num_dinners: int = 5,
     use_up: str = "",
 ) -> Plan:
+    _ensure_feasible(conn, user_id)
     with telemetry.session(tenant=str(user_id)) as trace_id:
         past = recent_avoided(conn, user_id)  # recent (non-liked) + disliked dinners to not repeat
         ctx = _plan_context(conn, user_id, offers, num_dinners, past, use_up)
@@ -213,6 +226,7 @@ def decline(
     translator: Translator | None = None,
 ) -> Plan:
     """Replace one dish with a fresh, macro-verified alternative and re-persist the plan."""
+    _ensure_feasible(conn, user_id)
     plan = load_plan(conn, user_id, plan_id)
     if not 0 <= slot_index < len(plan.recipes):  # not this user's plan, or no such dish
         raise LookupError(f"plan {plan_id} has no dish {slot_index} for this user")

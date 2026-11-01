@@ -1,11 +1,15 @@
+import pytest
+
 from app.agent import PlanContext, Recipe
 from app.nutrition import Ingredient, Macros
 from app.planner import (
+    InfeasibleTargets,
     PlannedRecipe,
     decline,
     generate_plan,
     is_print_compact,
     load_latest_plan,
+    load_plan,
     weekday_meals,
 )
 from app.profile import Preferences, save_preferences, save_rating
@@ -400,3 +404,44 @@ def test_is_print_compact_true_at_step_threshold():
 
 def test_is_print_compact_false_just_below_both_thresholds():
     assert is_print_compact(_print_compact_recipe(13, 9)) is False
+
+
+class _CountingAgent(FakeAgent):
+    def __init__(self):
+        super().__init__([_recipe("A")], replacement=_recipe("R"))
+        self.calls = 0
+
+    def plan_week(self, ctx):
+        self.calls += 1
+        return super().plan_week(ctx)
+
+
+def test_generate_plan_refuses_impossible_targets_before_calling_the_llm(conn):
+    _conn(conn, max_kcal=250, min_protein=10)  # legacy data saved before safe stops existed
+    agent = _CountingAgent()
+    with pytest.raises(InfeasibleTargets, match="300 kcal"):
+        generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]),
+                      nutrition=FakeNutrition(WITHIN), num_dinners=1)
+    assert agent.calls == 0
+    assert conn.execute("SELECT COUNT(*) n FROM plans").fetchone()["n"] == 0
+
+
+def test_unrealistic_but_kept_targets_still_plan(conn):
+    _conn(conn, max_kcal=400, min_protein=50)  # the user chose "keep mine"
+    agent = _CountingAgent()
+    generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]),
+                  nutrition=FakeNutrition(WITHIN), num_dinners=1)
+    assert agent.calls == 1
+
+
+def test_decline_refuses_impossible_targets_and_leaves_the_plan_alone(conn):
+    _conn(conn)
+    agent = FakeAgent([_recipe("A")], replacement=_recipe("R"))
+    plan = generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]),
+                         nutrition=FakeNutrition(WITHIN), num_dinners=1)
+    _conn(conn, max_kcal=250, min_protein=10)  # legacy data saved before safe stops existed
+    with pytest.raises(InfeasibleTargets):
+        decline(conn, TEST_USER_ID, plan.id, 0, agent=agent, offers=FakeOffers([]),
+                nutrition=FakeNutrition(WITHIN))
+    assert agent.replace_calls == 0
+    assert [r.title for r in load_plan(conn, TEST_USER_ID, plan.id).recipes] == ["A"]

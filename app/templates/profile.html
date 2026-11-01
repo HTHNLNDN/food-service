@@ -24,6 +24,7 @@
     <input type="number" name="min_protein_g"
            value="{{ prefs.min_protein_g if prefs.min_protein_g is not none else '' }}" placeholder="e.g. 40">
   </label>
+  {% include "_targets_check.html" %}
   <label>Dietary notes
     <input type="text" name="restrictions" value="{{ prefs.restrictions }}"
            placeholder="PCOS, high-protein">

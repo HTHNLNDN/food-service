@@ -1,7 +1,7 @@
 import csv
 import io
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -18,6 +18,7 @@ from app import i18n
 from app.auth import CurrentUser
 from app.bans import BAN_CATEGORIES, KNOWN_CATEGORY_IDS
 from app.db import Conn
+from app.feasibility import IMPOSSIBLE, UNREALISTIC, check_targets
 
 # Canonical DK chains from ShelfAtlas: (slug, display name).
 CHAINS: list[tuple[str, str]] = [
@@ -221,13 +222,32 @@ router = APIRouter()
 @router.get("/profile", response_class=HTMLResponse)
 def profile_form(request: Request, conn: Conn, user: CurrentUser, saved: bool = False):
     prefs = load_preferences(conn, user.id)
+    return _profile_page(request, prefs, saved=saved,
+                         verdict=check_targets(prefs.max_kcal, prefs.min_protein_g), pending=False)
+
+
+def _profile_page(request: Request, prefs: Preferences, *, saved: bool, verdict, pending: bool,
+                  status_code: int = 200):
     custom_bans = [b for b in prefs.bans if b not in KNOWN_CATEGORY_IDS]
     return request.app.state.templates.TemplateResponse(
         request,
         "profile.html",
         {"title": "Preferences", "prefs": prefs, "chains": CHAINS,
-         "ban_categories": BAN_CATEGORIES, "custom_bans": custom_bans, "saved": saved},
+         "ban_categories": BAN_CATEGORIES, "custom_bans": custom_bans, "saved": saved,
+         "verdict": verdict, "pending": pending},
+        status_code=status_code,
     )
+
+
+def _parse_choice(choice: str) -> tuple[int | None, int | None] | None:
+    """'700/50' -> (700, 50); '/30' -> (None, 30); anything malformed -> None."""
+    kcal, sep, protein = choice.strip().partition("/")
+    if not sep:
+        return None
+    try:
+        return (int(kcal) if kcal else None, int(protein) if protein else None)
+    except ValueError:
+        return None
 
 
 @router.post("/profile")
@@ -243,25 +263,35 @@ def profile_save(
     bans: Annotated[list[str] | None, Form()] = None,
     bans_custom: Annotated[str, Form()] = "",
     language: Annotated[str, Form()] = "",
+    targets_choice: Annotated[str, Form()] = "",  # an offered alternative "kcal/protein", or "keep"
 ):
     # kept chips (categories + existing customs) + newly typed customs; replaces the whole list
     kept = [b.strip().lower() for b in (bans or []) if b.strip()]
     added = [b.strip().lower() for b in bans_custom.split(",") if b.strip()]
     all_bans = list(dict.fromkeys([*kept, *added]))  # dedupe, preserve order
     language = language.strip()
-    save_preferences(
-        conn,
-        user.id,
-        Preferences(
-            max_kcal=int(max_kcal) if max_kcal.strip() else None,
-            min_protein_g=int(min_protein_g) if min_protein_g.strip() else None,
-            restrictions=restrictions.strip(),
-            servings=servings,
-            stores=stores or [],
-            bans=all_bans,
-            language=language,
-        ),
+    prefs = Preferences(
+        max_kcal=int(max_kcal) if max_kcal.strip() else None,
+        min_protein_g=int(min_protein_g) if min_protein_g.strip() else None,
+        restrictions=restrictions.strip(),
+        servings=servings,
+        stores=stores or [],
+        bans=all_bans,
+        language=language,
     )
+    chosen = _parse_choice(targets_choice) if targets_choice != "keep" else None
+    if chosen is not None:  # an offered alternative replaces the typed targets
+        prefs = replace(prefs, max_kcal=chosen[0], min_protein_g=chosen[1])
+    verdict = check_targets(prefs.max_kcal, prefs.min_protein_g)
+    needs_choice = verdict.level == UNREALISTIC and targets_choice != "keep"
+    if needs_choice:  # already kept earlier: don't re-challenge
+        current = load_preferences(conn, user.id)
+        if (prefs.max_kcal, prefs.min_protein_g) == (current.max_kcal, current.min_protein_g):
+            needs_choice = False
+    if verdict.level == IMPOSSIBLE or needs_choice:  # server-side: nothing is saved
+        return _profile_page(request, prefs, saved=False, verdict=verdict, pending=True,
+                             status_code=422)
+    save_preferences(conn, user.id, prefs)
     if language:
         # warm the static UI-chrome cache (app/i18n.py) so nav/headings show translated too,
         # not just recipes — best-effort, never blocks the save (see i18n.warm docstring)

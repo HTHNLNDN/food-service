@@ -1,0 +1,26 @@
+{# Safe stops for targets. `verdict`: app.feasibility.Verdict; `pending`: targets not saved yet.
+   Choices are radios inside the surrounding form, so Enter still means "Save". #}
+{% if verdict and verdict.level != "fine" %}
+<div class="{{ 'error' if pending and verdict.level in ('impossible', 'unrealistic') else 'notice' }} targets-check"
+     role="{{ 'alert' if pending else 'status' }}">
+  <p>{{ verdict.reason }}</p>
+  {% if pending and verdict.alternatives %}
+  <fieldset class="stack">
+    <legend>Pick one, then press Save:</legend>
+    {% for alt in verdict.alternatives %}
+    <label class="chip">
+      <input type="radio" name="targets_choice"
+             value="{{ alt.max_kcal if alt.max_kcal is not none else '' }}/{{ alt.min_protein_g if alt.min_protein_g is not none else '' }}">
+      {% if alt.max_kcal is not none %}~{{ alt.max_kcal }} kcal{% endif %}{% if alt.max_kcal is not none and alt.min_protein_g is not none %}, {% endif %}{% if alt.min_protein_g is not none %}{{ alt.min_protein_g }} g protein{% endif %}
+    </label>
+    {% endfor %}
+    {% if verdict.can_keep %}
+    <label class="chip">
+      <input type="radio" name="targets_choice" value="keep">
+      Keep mine anyway, and I'll do my best
+    </label>
+    {% endif %}
+  </fieldset>
+  {% endif %}
+</div>
+{% endif %}

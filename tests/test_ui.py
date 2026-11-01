@@ -399,3 +399,55 @@ def test_static_chrome_stays_english_without_a_language_configured(db):
     assert "This week's dinners" not in home  # no plan yet, but nav/title chrome renders
     assert "Plan this week" in home
     assert "Shopping" in home and "[Shopping]" not in home
+
+
+def test_plan_page_blocks_planning_with_impossible_targets(conn):
+    from app.profile import Preferences, save_preferences
+
+    save_preferences(conn, TEST_USER_ID, Preferences(250, 10, "", 2, ["rema"]))  # legacy
+    calls = []
+
+    class _Agent(FakeAgent):
+        def plan_week(self, ctx):
+            calls.append(ctx)
+            return super().plan_week(ctx)
+
+    with TestClient(app) as client:
+        login(client)
+        client.app.state.build_services = lambda config, c: Services(
+            _Agent([_recipe("X", "rice")], _recipe("Y", "rice")), FakeOffers([]),
+            FakeNutrition(), FakeMatcher())
+        client.app.state.plan_sync = True
+        home = client.get("/").text
+        assert "300 kcal" in home and 'href="/profile"' in home
+        assert 'action="/plan"' not in home  # no plan button while blocked
+        resp = client.post("/plan", follow_redirects=False)
+        assert resp.status_code == 303
+    assert calls == []
+    assert conn.execute("SELECT COUNT(*) n FROM plans").fetchone()["n"] == 0
+
+
+def test_decline_is_blocked_when_saved_targets_are_impossible(conn):
+    from app.profile import Preferences, save_preferences
+
+    calls = []
+
+    class _Agent(FakeAgent):
+        def replace(self, declined, ctx):
+            calls.append(declined)
+            return super().replace(declined, ctx)
+
+    with TestClient(app) as client:
+        login(client)
+        client.app.state.build_services = lambda config, c: Services(
+            _Agent([_recipe("Chicken bowl", "chicken breast")], _recipe("Backup dinner", "eggs")),
+            FakeOffers([]), FakeNutrition(), FakeMatcher())
+        client.app.state.plan_sync = True
+        _set_profile(client)
+        client.post("/plan", follow_redirects=False)
+        save_preferences(conn, TEST_USER_ID, Preferences(250, 10, "", 2, ["rema"]))  # legacy
+        resp = client.post("/plan/0/decline", follow_redirects=False)
+        home = client.get("/").text
+    assert resp.status_code == 303
+    assert calls == []
+    assert "Chicken bowl" in home and "Backup dinner" not in home

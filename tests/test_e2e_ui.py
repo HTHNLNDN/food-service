@@ -281,3 +281,16 @@ def test_tabbar_hidden_in_print_media(live_server, page):
     page.emulate_media(media="print")
     display = page.eval_on_selector("nav.tabbar", "el => getComputedStyle(el).display")
     assert display == "none", "tab bar must not render in print media"
+
+
+def test_unrealistic_targets_offer_alternatives_in_the_browser(live_server, page):
+    page.goto(f"{live_server}/profile")
+    page.fill("input[name=max_kcal]", "400")
+    page.fill("input[name=min_protein_g]", "50")
+    page.click("button[type=submit]")
+    assert "plain lean meat" in page.content()
+    page.check("input[name=targets_choice][value='700/50']")
+    page.click("button[type=submit]")
+    page.wait_for_url(f"{live_server}/profile?saved=1")
+    assert page.input_value("input[name=max_kcal]") == "700"
+    assert page.input_value("input[name=min_protein_g]") == "50"
