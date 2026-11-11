@@ -382,7 +382,7 @@ def test_signup_creates_an_account_and_signs_you_in(db):
         assert 'autocomplete="new-password"' in form and 'autocomplete="username"' in form
         assert "no password reset" in form.lower()
         resp = _signup(client)
-        assert resp.status_code == 303 and resp.headers["location"] == "/"
+        assert resp.status_code == 303 and resp.headers["location"] == "/onboarding"
         assert f"Max-Age={90 * 24 * 3600}" in resp.headers["set-cookie"]
         assert client.get("/").status_code == 200
     with TestClient(app) as again:

@@ -1,0 +1,28 @@
+{% extends "onboarding/_layout.html" %}
+{% block bubble %}What would you like from your dinners? Pick up to {{ max_goals }}.{% endblock %}
+{% block why %}
+<p class="muted why">So I can set sensible portions and know what to aim for.</p>
+<details class="why-more"><summary>Why?</summary>
+  <p>Each goal sets what I aim for in a standard portion, and some change how I build the
+  week. I never ask about weight. You'll see the details on the last screen and can change
+  them any time.</p>
+</details>
+{% endblock %}
+{% block form %}
+<fieldset><legend>Goals</legend>
+  <div class="goal-list">
+    {% for g in goal_options %}
+    <label class="chip goal"><input type="checkbox" name="goals" value="{{ g.id }}"{% if g in picked_goals %} checked{% endif %}>
+      <span><strong>{{ g.label }}</strong><br><span class="muted">{{ g.line }}</span></span></label>
+    {% endfor %}
+  </div>
+</fieldset>
+<fieldset><legend>I'd like dinners that suit (optional)</legend>
+  {% for c in condition_options %}
+  <label class="chip goal"><input type="checkbox" name="conditions" value="{{ c.id }}"{% if c in picked_conditions %} checked{% endif %}>
+    <span><strong>{{ c.label }}</strong><br><span class="muted">Adds: {{ c.pointers | join(", ") }}. Only these go to the AI, not the condition.</span></span></label>
+  {% endfor %}
+</fieldset>
+<button type="submit" name="action" value="next">Next</button>
+<button type="submit" name="action" value="skip" class="secondary">Not sure? I'll start you on balanced dinners.</button>
+{% endblock %}

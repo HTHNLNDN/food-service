@@ -46,6 +46,9 @@ class PlanContext:
     bans: list[str] = field(default_factory=list)  # banned category ids + custom items
     avoid_dishes: list[str] = field(default_factory=list)  # recent dinners to not repeat
     use_up: str = ""            # free-text ingredients the user already has and wants to use
+    cooking_style: str = ""     # soft preference from onboarding ("No deep-frying; …"), never a ban
+    goal_notes: list[str] = field(default_factory=list)     # from onboarding goals (app/goals.py)
+    diet_pointers: list[str] = field(default_factory=list)  # from conditions; never their names
     plan_dishes: list[str] = field(default_factory=list)  # "Title (cuisine, protein)" already in this plan
 
 
@@ -71,7 +74,7 @@ _SYSTEM = (
     "or cauliflower rice.\n"
     "2) A BALANCED PLATE: most dinners have a filling carb base (rice, potatoes, pasta, bread, "
     "whole grains, beans or lentils) and enough fat to taste good (olive oil, butter, cheese, "
-    "yogurt, nuts, avocado, coconut milk). PCOS-friendly does not mean low-carb or low-fat: prefer "
+    "yogurt, nuts, avocado, coconut milk). Healthy does not mean low-carb or low-fat: prefer "
     "slower carbs (whole grains, legumes, potatoes with skin) and plenty of vegetables.\n"
     "3) FLAVOUR: build every dish on aromatics, spices or herbs, an acid (lemon, lime, vinegar) "
     "and a sauce, dressing or topping. Pantry spices, sauces and condiments don't count against "
@@ -118,6 +121,13 @@ def _constraints(ctx: PlanContext) -> str:
             "NEVER include any of these banned foods, or ingredients made from them: "
             + ", ".join(ban_display(ctx.bans)) + "."
         )
+    if ctx.cooking_style.strip():
+        parts.append(
+            f"Cooking preferences (soft, follow where you can): {ctx.cooking_style.strip()}.")
+    if ctx.goal_notes:
+        parts.append("Goals for this household: " + " ".join(ctx.goal_notes))
+    if ctx.diet_pointers:
+        parts.append("Also favour: " + ", ".join(ctx.diet_pointers) + ".")
     if ctx.avoid_dishes:
         parts.append(
             "Do NOT repeat these recent dinners — make clearly different meals: "

@@ -1,4 +1,15 @@
-from app.bans import KNOWN_CATEGORY_IDS, ban_display, banned_hits, violates
+import pytest
+
+from app.bans import (
+    ALLERGY_CHIPS,
+    BAN_CATEGORIES,
+    DIET_CHIPS,
+    DISLIKES,
+    KNOWN_CATEGORY_IDS,
+    ban_display,
+    banned_hits,
+    violates,
+)
 from app.nutrition import Ingredient
 
 
@@ -57,3 +68,26 @@ def test_violates_over_ingredient_objects():
 def test_known_category_ids_cover_the_core_set():
     assert {"fish", "shellfish", "pork", "beef", "poultry", "meat", "dairy", "egg",
             "gluten", "nuts", "soy"} <= KNOWN_CATEGORY_IDS
+
+
+def test_onboarding_chip_groups_cover_exactly_the_13_categories():
+    assert sorted(DIET_CHIPS + ALLERGY_CHIPS) == sorted(cid for cid, _, _ in BAN_CATEGORIES)
+
+
+@pytest.mark.parametrize(("dislike", "hit", "miss"), [
+    ("anchovies", "anchovy fillets", "sardines"),
+    ("olives", "pitted kalamata olives", "olive oil"),
+    ("blue cheese", "crumbled gorgonzola", "cheddar cheese"),
+    ("coriander", "fresh coriander", "ground coriander"),
+    ("mushrooms", "sliced mushroom", "button squash"),
+    ("oysters", "fresh oysters", "oyster sauce"),
+    ("squid", "calamari rings", "shrimp"),
+])
+def test_dislikes_match_their_variants_but_not_lookalikes(dislike, hit, miss):
+    assert banned_hits([hit], [dislike])
+    assert not banned_hits([miss], [dislike])
+
+
+def test_dislikes_display_by_name():
+    assert ban_display(["blue cheese", "fish", "kale"]) == ["Blue cheese", "Fish", "kale"]
+    assert len(DISLIKES) == 9
