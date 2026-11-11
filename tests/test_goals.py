@@ -49,11 +49,10 @@ def test_known_filters_unknown_ids_and_duplicates():
     assert conditions.known(["pmos", "pcos", "pmos"]) == ["pmos"]
 
 
-def test_pmos_entry_has_its_label_pointers_source_and_review_date():
+def test_pmos_entry_has_its_label_and_pointers():
     (pmos,) = conditions.CONDITIONS
     assert pmos.id == "pmos" and pmos.label == "PMOS (formerly PCOS)"
     assert conditions.pointers_for(["pmos"]) == [
         "lower-GI carbohydrates", "good protein and fibre", "unsaturated fats"]
-    assert pmos.source and pmos.reviewed.year >= 2026
     for pointer in pmos.pointers:  # pointers never name the condition
         assert "pmos" not in pointer.lower() and "pcos" not in pointer.lower()

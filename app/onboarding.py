@@ -19,7 +19,6 @@ from app import conditions, goals
 from app.auth import CurrentUser
 from app.bans import ALLERGY_CHIPS, BAN_CATEGORIES, DIET_CHIPS, DISLIKES, ban_display
 from app.db import Conn
-from app.feasibility import FINE, check_targets
 from app.profile import Preferences, load_preferences, parse_bans, save_preferences
 
 STEPS = ("welcome", "household", "goals", "leave_out", "cooking", "stores", "review")
@@ -28,7 +27,6 @@ QUESTIONS = STEPS[1:-1]  # "Step n of 5"
 BUILT = ("welcome", "household", "goals", "leave_out", "cooking", "review")
 
 DEFAULT_SERVINGS = 2
-DEFAULT_KCAL, DEFAULT_PROTEIN = 700, 25  # the "eat a bit healthier" goal
 MIN_SERVINGS, MAX_SERVINGS = 1, 8
 COOKING_CHIPS = ("No deep-frying", "No whole fish or offal", "Short ingredient lists",
                  "No seed oils", "One-pot or sheet-pan")
@@ -96,9 +94,10 @@ def next_step(step: str) -> str:
 
 def start(conn: psycopg.Connection, user_id: int) -> None:
     """Begin onboarding for a brand-new account: save the defaults and a welcome row."""
+    kcal, protein = goals.DEFAULT_TARGETS
     with conn.transaction():
         save_preferences(conn, user_id, Preferences(
-            max_kcal=DEFAULT_KCAL, min_protein_g=DEFAULT_PROTEIN, restrictions="",
+            max_kcal=kcal, min_protein_g=protein, restrictions="",
             servings=DEFAULT_SERVINGS, stores=[], bans=[], language=""))
         conn.execute("INSERT INTO user_onboarding (user_id, started_at, step) "
                      "VALUES (%s, %s, 'welcome')", (user_id, datetime.now(UTC)))
@@ -192,7 +191,7 @@ def _screen(request: Request, conn: psycopg.Connection, user_id: int, step: str,
          "condition_options": conditions.CONDITIONS,
          "picked_goals": [by_goal[i] for i in goals.known(saved.goals)],
          "picked_conditions": [by_condition[i] for i in conditions.known(saved.conditions)],
-         "verdict": check_targets(prefs.max_kcal, prefs.min_protein_g), "FINE": FINE, **ctx},
+         **ctx},
         status_code=status_code,
     )
 

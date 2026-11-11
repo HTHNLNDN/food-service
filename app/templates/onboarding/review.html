@@ -7,8 +7,7 @@
   <dt>Goals</dt>
   <dd>{{ picked_goals | map(attribute="label") | join(" · ") if picked_goals else "Balanced dinners, to start with." }} <a class="link" href="/onboarding/goals">Edit</a></dd>
   <dt>Dinner targets</dt>
-  <dd>I'll aim for dinners around {{ prefs.max_kcal }} kcal with at least {{ prefs.min_protein_g }} g protein. That's a standard portion: take a bit more or less to suit you.
-    {% if verdict.level != FINE %}<span class="notice">{{ verdict.reason }}</span>{% endif %}</dd>
+  <dd>I'll aim for dinners around {{ prefs.max_kcal }} kcal with at least {{ prefs.min_protein_g }} g protein. That's a standard portion: take a bit more or less to suit you.</dd>
   {% if picked_conditions %}
   <dt>Dinners that suit</dt>
   {% for c in picked_conditions %}
