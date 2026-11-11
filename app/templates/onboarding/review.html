@@ -1,0 +1,27 @@
+{% extends "onboarding/_layout.html" %}
+{% block bubble %}Here's what I set up and why. You can change any of it later in Preferences.{% endblock %}
+{% block form %}
+<dl class="review">
+  <dt>Household</dt>
+  <dd>{{ prefs.servings }} {{ "person" if prefs.servings == 1 else "people" }}: I'll cook that many portions. <a class="link" href="/onboarding/household">Edit</a></dd>
+  <dt>Goals</dt>
+  <dd>{{ picked_goals | map(attribute="label") | join(" · ") if picked_goals else "Balanced dinners, to start with." }} <a class="link" href="/onboarding/goals">Edit</a></dd>
+  <dt>Dinner targets</dt>
+  <dd>I'll aim for dinners around {{ prefs.max_kcal }} kcal with at least {{ prefs.min_protein_g }} g protein. That's a standard portion: take a bit more or less to suit you.
+    {% if verdict.level != FINE %}<span class="notice">{{ verdict.reason }}</span>{% endif %}</dd>
+  {% if picked_conditions %}
+  <dt>Dinners that suit</dt>
+  {% for c in picked_conditions %}
+  <dd>{{ c.label }}: I'll ask for {{ c.pointers | join(", ") }}. Only these pointers go to the AI, never the condition.</dd>
+  {% endfor %}
+  {% endif %}
+  <dt>Foods left out</dt>
+  <dd>{{ ban_names | join(", ") if ban_names else "Nothing." }} <a class="link" href="/onboarding/leave_out">Edit</a></dd>
+  <dt>How you like to cook</dt>
+  <dd>{{ cooking_style or "No preferences." }} <a class="link" href="/onboarding/cooking">Edit</a></dd>
+  <dt>Stores</dt>
+  <dd>{{ prefs.stores | join(", ") if prefs.stores else "None yet. Add the stores you shop at in Preferences to see this week's offers." }}</dd>
+</dl>
+<p class="notice">I plan everyday dinners, not medical diets. If you're pregnant, breastfeeding, under 18, or managing a health condition, check your targets with a doctor or dietitian.</p>
+<button type="submit" name="action" value="done">Looks good</button>
+{% endblock %}

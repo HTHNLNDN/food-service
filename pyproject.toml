@@ -1,7 +1,7 @@
 [project]
 name = "food-service"
 version = "0.1.0"
-description = "Weekly PCOS-friendly meal planner (single-tenant, local-first)"
+description = "Weekly dinner planner grounded in Danish grocery offers, with deterministic macros"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",

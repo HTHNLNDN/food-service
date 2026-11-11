@@ -9,8 +9,9 @@ n-amount of people, grounded in current Danish grocery offers, with **determinis
 
 ## What it does
 
-1. You set preferences (calorie/protein targets, restrictions like PCOS/vegan, the DK stores
-   you shop at).
+1. You set your household, goals (e.g. lose weight gently, more protein), foods to leave out,
+   and the DK stores you shop at. Conditions like PMOS (formerly PCOS) add cooking pointers
+   without the condition's name ever reaching the AI.
 2. "Plan this week" pulls current offers for your stores (ShelfAtlas) and an LLM writes
    weekday dinners biased toward what's on sale.
 3. **Every macro is recomputed deterministically** from USDA FoodData Central — the LLM is

@@ -274,3 +274,25 @@ table.grid th { color: var(--muted); font-weight: 600; }
   .print-recipe { page-break-after: always; min-height: 186mm; }
   .print-recipe:last-child { page-break-after: auto; }
 }
+
+/* --- onboarding --- */
+.onboarding { max-width: 34rem; }
+.progress { height: 4px; background: var(--border); border-radius: 2px; margin: var(--space-1) 0 var(--space-3); }
+.progress span { display: block; height: 100%; background: var(--accent-strong); border-radius: 2px; }
+.bubble { font-size: var(--text-md); line-height: 1.45; padding: var(--space-3); border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-card); }
+.why { margin: var(--space-2) 0 0; }
+.why-more { margin: var(--space-1) 0 var(--space-3); }
+.household { display: flex; flex-wrap: wrap; gap: var(--space-2); border: 0; padding: 0; }
+.household .chip { min-width: 3rem; justify-content: center; }
+.review dt { font-weight: 600; margin-top: var(--space-3); }
+.review dd { margin: var(--space-1) 0 0; }
+.skip-setup { margin-top: var(--space-4); }
+.setup-card { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+/* a low-key action that reads like a link (Skip setup, Not now) */
+button.quiet { background: transparent; color: var(--muted); border: none; padding: var(--space-1) 0;
+  font-size: var(--text-sm); text-decoration: underline; }
+.onboarding fieldset { border: 0; padding: 0; margin: 0 0 var(--space-3); }
+.onboarding legend { font-weight: 600; margin-bottom: var(--space-2); }
+.goal-list { display: grid; gap: var(--space-2); }
+.chip.goal { align-items: flex-start; }

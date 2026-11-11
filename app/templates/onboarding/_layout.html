@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="onboarding">
+  {% if number %}
+  <p class="progress-label muted">Step {{ number }} of {{ total }}</p>
+  <div class="progress" aria-hidden="true"><span style="width: {{ (number / total * 100) | round | int }}%"></span></div>
+  {% endif %}
+  <p class="bubble">{% block bubble %}{% endblock %}</p>
+  {% block why %}{% endblock %}
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/onboarding/{{ step }}" class="stack">
+    {% block form %}{% endblock %}
+    <button type="submit" name="action" value="skip_all" class="quiet skip-setup">Skip setup</button>
+  </form>
+</section>
+{% endblock %}

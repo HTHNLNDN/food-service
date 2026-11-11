@@ -28,7 +28,8 @@
   {% include "_targets_check.html" %}
   <label>Dietary notes
     <input type="text" name="restrictions" value="{{ prefs.restrictions }}"
-           placeholder="PCOS, high-protein">
+           placeholder="e.g. high-protein, mild spice">
+    <small class="muted">{{ free_text_hint }}</small>
   </label>
   <label>Servings
     <input type="number" name="servings" value="{{ prefs.servings }}" min="1">
@@ -70,9 +71,10 @@
     </div>
     <label>Ban specific foods (comma-separated)
       <input type="text" name="bans_custom" placeholder="e.g. mushrooms, salmon">
+      <small class="muted">{{ free_text_hint }}</small>
     </label>
-    <p class="muted">Uncheck any to allow it again. Best-effort matching — not a guarantee for
-    severe allergies.</p>
+    <p class="muted">Uncheck any to allow it again.</p>
+    <p class="notice">{{ best_effort_notice }}</p>
   </fieldset>
 
   {{ button(t("Save")) }}

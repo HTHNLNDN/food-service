@@ -5,6 +5,7 @@ from app.profile import (
     CHAINS,
     Preferences,
     load_preferences,
+    parse_bans,
     save_preferences,
     selected_store_slugs,
 )
@@ -288,3 +289,17 @@ def test_calorie_field_reads_as_a_target_not_a_maximum(db):
     assert "Calories per serving" in page
     assert "Max calories" not in page
     assert "give or take 10%" in page
+
+
+def test_parse_bans_lowercases_dedupes_and_keeps_order():
+    assert parse_bans(["fish", " Fish "], "Kale, kale ,  Okra,") == ["fish", "kale", "okra"]
+    assert parse_bans(None, "") == []
+
+
+def test_preferences_show_the_best_effort_notice_and_free_text_hint(db):
+    with TestClient(app) as client:
+        login(client)
+        page = client.get("/profile").text
+    assert "If you have a serious allergy, always check the ingredients yourself." in page
+    assert page.count("leave out names and medical details") == 2  # bans + dietary notes
+    assert "PCOS" not in page and "PMOS" not in page               # no medical placeholder
