@@ -390,11 +390,16 @@ def signup(
         return fail("The passwords don't match.")
     if not understood:
         return fail("Please confirm you understand a forgotten password can't be recovered.")
+    # local import: onboarding builds on profile, which imports this module
+    from app.onboarding import start as start_onboarding
+
     try:
-        user = create_user(conn, _key(request), username, password)
+        with conn.transaction():  # the account, its defaults and its onboarding row, or none
+            user = create_user(conn, _key(request), username, password)
+            start_onboarding(conn, user.id)
     except ValueError as exc:
         return fail(str(exc).capitalize() + ".")
-    return _signed_in_response(request, conn, user, "/", persistent=True)
+    return _signed_in_response(request, conn, user, "/onboarding", persistent=True)
 
 
 @router.post("/logout")

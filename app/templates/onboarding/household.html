@@ -1,0 +1,19 @@
+{% extends "onboarding/_layout.html" %}
+{% block bubble %}How many people do you cook dinner for?{% endblock %}
+{% block why %}
+<p class="muted why">So every recipe makes the right amount.</p>
+<details class="why-more"><summary>Why?</summary>
+  <p>I scale each recipe to your household, and the shopping list follows. Each person
+  regulates their own portion, so one setup works for everyone at the table.</p>
+</details>
+{% endblock %}
+{% block form %}
+<fieldset class="chip-grid household">
+  <legend class="muted">People</legend>
+  {% for n in range(1, 9) %}
+  <label class="chip"><input type="radio" name="servings" value="{{ n }}"{% if n == prefs.servings %} checked{% endif %}> {{ n }}</label>
+  {% endfor %}
+</fieldset>
+<button type="submit" name="action" value="next">Next</button>
+<button type="submit" name="action" value="skip" class="secondary">Skip</button>
+{% endblock %}

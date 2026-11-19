@@ -1,0 +1,22 @@
+{% extends "onboarding/_layout.html" %}
+{% block bubble %}How do you like to cook? Pick anything that fits, or skip.{% endblock %}
+{% block why %}
+<p class="muted why">So the recipes suit your kitchen and habits.</p>
+<details class="why-more"><summary>Why?</summary>
+  <p>I pass these on as preferences, not rules, so a recipe can still use olive oil when you
+  skip seed oils. For foods you won't eat at all, use the previous step.</p>
+</details>
+{% endblock %}
+{% block form %}
+<div class="chip-grid">
+  {% for c in cooking_chips %}
+  <label class="chip"><input type="checkbox" name="cooking" value="{{ c }}"{% if c in cooking_picked %} checked{% endif %}> {{ c }}</label>
+  {% endfor %}
+</div>
+<label>Anything else? (optional)
+  <input type="text" name="cooking_note" value="{{ cooking_note }}" placeholder="e.g. air fryer when possible">
+  <small class="muted">{{ free_text_hint }}</small>
+</label>
+<button type="submit" name="action" value="next">Next</button>
+<button type="submit" name="action" value="skip" class="secondary">Skip</button>
+{% endblock %}

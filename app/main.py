@@ -10,9 +10,11 @@ from fastapi.templating import Jinja2Templates
 from app import i18n, telemetry
 from app.auth import auth_middleware, parse_username_key
 from app.auth import router as auth_router
+from app.bans import BEST_EFFORT_NOTICE
 from app.config import load_config
 from app.db import make_pool
-from app.profile import load_preferences
+from app.onboarding import router as onboarding_router
+from app.profile import FREE_TEXT_HINT, load_preferences
 from app.profile import router as profile_router
 from app.services import build_services
 from app.ui import router as ui_router
@@ -34,6 +36,7 @@ def _i18n_context(request: Request) -> dict:
 templates = Jinja2Templates(
     directory=str(BASE_DIR / "templates"), context_processors=[_i18n_context]
 )
+templates.env.globals.update(best_effort_notice=BEST_EFFORT_NOTICE, free_text_hint=FREE_TEXT_HINT)
 
 
 @asynccontextmanager
@@ -60,6 +63,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 app.include_router(ui_router)
 app.include_router(profile_router)
 app.include_router(auth_router)
+app.include_router(onboarding_router)
 app.middleware("http")(auth_middleware)  # every route requires a signed-in user unless opened
 
 

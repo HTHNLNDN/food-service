@@ -48,6 +48,15 @@ CHAINS: list[tuple[str, str]] = [
 ]
 _CHAIN_SLUGS = {slug for slug, _ in CHAINS}
 
+FREE_TEXT_HINT = "Sent to the AI as written, so leave out names and medical details."
+
+
+def parse_bans(chips: list[str] | None, custom: str) -> list[str]:
+    """Kept chips plus comma-separated custom items: lower-cased, de-duplicated, in order."""
+    kept = [b.strip().lower() for b in (chips or []) if b.strip()]
+    added = [b.strip().lower() for b in custom.split(",") if b.strip()]
+    return list(dict.fromkeys([*kept, *added]))
+
 
 @dataclass
 class Preferences:
@@ -202,11 +211,18 @@ def export_all(conn: psycopg.Connection, user_id: int) -> dict:
             "ORDER BY caused_revise DESC, hits DESC, name"
         )
     ]
+    ob = conn.execute(
+        "SELECT started_at, completed_at, skipped_at, dismissed_at, step, goals, conditions, "
+        "cooking_style FROM user_onboarding WHERE user_id = %s", (user_id,)).fetchone()
+    if ob is not None:
+        ob = {k: v.isoformat() if isinstance(v, datetime) else v for k, v in ob.items()}
+        ob["goals"], ob["conditions"] = json.loads(ob["goals"]), json.loads(ob["conditions"])
     return {
         "preferences": asdict(load_preferences(conn, user_id)),
         "plans": plans,
         "ratings": [asdict(r) for r in rating_history(conn, user_id)],
         "missing_ingredients": missing,
+        "onboarding": ob,
     }
 
 
@@ -269,9 +285,7 @@ def profile_save(
     targets_choice: Annotated[str, Form()] = "",  # an offered alternative "kcal/protein", or "keep"
 ):
     # kept chips (categories + existing customs) + newly typed customs; replaces the whole list
-    kept = [b.strip().lower() for b in (bans or []) if b.strip()]
-    added = [b.strip().lower() for b in bans_custom.split(",") if b.strip()]
-    all_bans = list(dict.fromkeys([*kept, *added]))  # dedupe, preserve order
+    all_bans = parse_bans(bans, bans_custom)
     language = language.strip()
     prefs = Preferences(
         max_kcal=int(max_kcal) if max_kcal.strip() else None,

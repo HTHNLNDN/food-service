@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 import psycopg
 
-from app import telemetry
+from app import conditions, goals, onboarding, telemetry
 from app.agent import KCAL_TOLERANCE, MealPlanAgent, PlanContext, Recipe
 from app.bans import violates
 from app.dates import iso_week
@@ -198,6 +198,7 @@ def _plan_context(
     past: list[PastDish] = (), use_up: str = "",
 ) -> PlanContext:
     prefs = load_preferences(conn, user_id)
+    saved = onboarding.answers(conn, user_id)  # goals, conditions, cooking style
     selected = selected_store_slugs(conn, user_id)
     offer_names = [o.name for o in offers.offers(selected)][:OFFER_PROMPT_CAP] if selected else []
     return PlanContext(
@@ -211,6 +212,9 @@ def _plan_context(
         bans=prefs.bans,
         avoid_dishes=[p.title for p in past][:AVOID_PROMPT_CAP],
         use_up=use_up,
+        cooking_style=saved.cooking_style,
+        goal_notes=goals.prompt_notes(saved.goals),
+        diet_pointers=conditions.pointers_for(saved.conditions),
     )
 
 

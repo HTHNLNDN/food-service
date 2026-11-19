@@ -19,7 +19,7 @@ from app.agent import Recipe
 from app.main import app
 from app.nutrition import Ingredient, Macros
 from app.services import Services
-from tests.conftest import TEST_PASSWORD, TEST_USERNAME
+from tests.conftest import TEST_PASSWORD, TEST_SIGNUP_CODE, TEST_USERNAME
 
 
 class _FakeAgent:
@@ -294,3 +294,95 @@ def test_unrealistic_targets_offer_alternatives_in_the_browser(live_server, page
     page.wait_for_url(f"{live_server}/profile?saved=1")
     assert page.input_value("input[name=max_kcal]") == "700"
     assert page.input_value("input[name=min_protein_g]") == "50"
+
+
+# --- onboarding: full path, skip setup, resume, phone width ---
+
+
+def _signup_in_browser(page, base, username="newcook"):
+    page.goto(f"{base}/signup")
+    page.fill("input[name=invite_code]", TEST_SIGNUP_CODE)
+    page.fill("input[name=username]", username)
+    page.fill("input[name=password]", "a fine password")
+    page.fill("input[name=confirm_password]", "a fine password")
+    page.check("input[name=understood]")
+    page.click("button[type=submit]")
+    page.wait_for_url(f"{base}/onboarding/welcome")
+
+
+def test_onboarding_full_path_in_at_most_7_page_loads(live_server, browser):
+    page = browser.new_page()
+    _signup_in_browser(page, live_server)
+    loads = []
+    page.on("load", lambda: loads.append(page.url))
+    page.click("text=Let's go")
+    page.wait_for_url("**/onboarding/household")
+    page.check("input[name=servings][value='3']")
+    page.click("button[value=next]")
+    page.wait_for_url("**/onboarding/goals")
+    page.check("input[name=goals][value='more_protein']")
+    page.click("button[value=next]")
+    page.wait_for_url("**/onboarding/leave_out")
+    page.click("button[value=next]")
+    page.wait_for_url("**/onboarding/cooking")
+    page.click("button[value=next]")
+    page.wait_for_url("**/onboarding/review")
+    assert "3 people" in page.content() and "40 g protein" in page.content()
+    assert len(loads) + 1 <= 7  # welcome + the steps + review: at most 7 screens
+    page.click("text=Looks good")
+    page.wait_for_url(f"{live_server}/")
+    assert "Finish setting up" not in page.content()
+    page.goto(f"{live_server}/profile")
+    assert page.input_value("input[name=servings]") == "3"
+
+
+def test_onboarding_skip_setup_goes_straight_to_planning(live_server, browser):
+    page = browser.new_page()
+    _signup_in_browser(page, live_server, "skipper")
+    page.click("text=Skip setup")
+    page.wait_for_url(f"{live_server}/")
+    assert "Plan this week" in page.content() and "Finish setting up" not in page.content()
+    page.goto(f"{live_server}/profile")
+    assert page.input_value("input[name=max_kcal]") == "700"
+    assert page.input_value("input[name=min_protein_g]") == "25"
+
+
+def test_onboarding_leave_and_resume(live_server, browser):
+    page = browser.new_page()
+    _signup_in_browser(page, live_server, "wanderer")
+    page.click("text=Let's go")
+    page.wait_for_url("**/onboarding/household")
+    page.goto(live_server)  # leave halfway
+    assert "Finish setting up (5 steps left)" in page.content()
+    page.click("text=Finish setting up")
+    page.wait_for_url("**/onboarding/household")  # resumes where they left off
+    page.click("button[value=skip]")
+    page.wait_for_url("**/onboarding/goals")
+
+
+def test_onboarding_fits_a_phone_screen(live_server, browser):
+    page = browser.new_page(viewport={"width": 360, "height": 740})
+    _signup_in_browser(page, live_server, "phone")
+    for path in ("welcome", "household", "goals", "leave_out", "cooking", "review"):
+        page.goto(f"{live_server}/onboarding/{path}")
+        assert page.evaluate("document.documentElement.scrollWidth <= 360"), path
+
+
+def test_first_plan_after_onboarding_respects_a_chosen_ban(live_server, browser):
+    class Nutrition:  # enough protein for the 25 g default, so only the ban forces a swap
+        def lookup(self, name):
+            return (1, Macros(100, 30, 0, 0, 2))
+
+    app.state.build_services = lambda c, conn: Services(_FakeAgent(), _FakeOffers(), Nutrition(),
+                                                        _FakeMatcher())
+    page = browser.new_page()
+    _signup_in_browser(page, live_server, "nofish")
+    page.goto(f"{live_server}/onboarding/leave_out")
+    page.check("input[name=bans][value='fish']")
+    page.click("button[value=next]")
+    page.wait_for_url("**/onboarding/cooking")
+    page.goto(live_server)
+    page.click("text=Plan this week")
+    page.wait_for_selector(".card")
+    content = page.content()
+    assert "Chicken Bowl" in content and "Trout" not in content and "Backup Dinner" in content

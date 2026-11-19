@@ -320,3 +320,34 @@ def test_recipe_parses_cuisine_and_main_protein_labels():
     agent = _agent(lambda _req: _completion(json.dumps({"recipes": [obj]})))
     r = agent.plan_week(CTX)[0]
     assert (r.cuisine, r.main_protein) == ("greek", "chicken")
+
+
+def test_cooking_style_is_a_preference_never_a_ban():
+    from app.agent import _constraints
+
+    ctx = PlanContext(max_kcal=600, min_protein_g=40, restrictions="", servings=2,
+                      num_dinners=5, offers=[], preference_summary="", bans=["fish"],
+                      cooking_style="No deep-frying; no seed oils")
+    text = _constraints(ctx)
+    ban_sentence = next(s for s in text.split(". ") if "NEVER include" in s)
+    assert "deep-frying" not in ban_sentence
+    assert "Cooking preferences (soft, follow where you can): No deep-frying; no seed oils." in text
+
+
+def test_system_prompt_names_no_condition():
+    from app.agent import _ADAPT, _SYSTEM
+
+    for prompt in (_SYSTEM, _ADAPT):
+        assert "pcos" not in prompt.lower() and "pmos" not in prompt.lower()
+
+
+def test_goal_notes_and_diet_pointers_reach_the_prompt():
+    from app.agent import _constraints
+
+    ctx = PlanContext(max_kcal=600, min_protein_g=40, restrictions="", servings=2,
+                      num_dinners=5, offers=[], preference_summary="",
+                      goal_notes=["Make about half of the dinners vegetarian."],
+                      diet_pointers=["lower-GI carbohydrates", "unsaturated fats"])
+    text = _constraints(ctx)
+    assert "Goals for this household: Make about half of the dinners vegetarian." in text
+    assert "Also favour: lower-GI carbohydrates, unsaturated fats." in text

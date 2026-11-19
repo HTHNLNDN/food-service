@@ -58,10 +58,39 @@ BAN_CATEGORIES: list[tuple[str, str, list[str]]] = [
 _CATEGORY = {cid: (display, kws) for cid, display, kws in BAN_CATEGORIES}
 KNOWN_CATEGORY_IDS = set(_CATEGORY)
 
+# Onboarding's chip groups, together exactly the 13 categories above.
+DIET_CHIPS = ("vegetarian", "vegan", "meat", "pork", "beef", "poultry")
+ALLERGY_CHIPS = ("fish", "shellfish", "dairy", "egg", "gluten", "nuts", "soy")
+
+# "Just not a fan": the most disliked ingredients. Stored in `bans` by id like a custom
+# item (so Preferences lists them as custom chips), but matched by curated keywords: plain word
+# matching would miss plurals and over-block ("olive" would ban olive oil).
+DISLIKES: list[tuple[str, str, list[str]]] = [
+    ("anchovies", "Anchovies", ["anchovy", "anchovies"]),
+    ("liver", "Liver", ["liver"]),
+    ("olives", "Olives", ["olives", "kalamata"]),  # not "olive": olive oil is fine
+    ("blue cheese", "Blue cheese", ["blue cheese", "gorgonzola", "roquefort", "stilton",
+                                    "danish blue"]),
+    ("coriander", "Coriander", ["cilantro", "fresh coriander", "coriander leaves"]),  # the leaf
+    ("mushrooms", "Mushrooms", ["mushroom", "mushrooms", "shiitake", "portobello", "porcini",
+                                "chanterelle", "champignon", "cremini"]),
+    ("tofu", "Tofu", ["tofu"]),
+    ("squid", "Squid", ["squid", "calamari"]),
+    ("oysters", "Oysters", ["oysters"]),  # not "oyster": oyster sauce is a different thing
+]
+_DISLIKE = {did: (display, kws) for did, display, kws in DISLIKES}
+
+BEST_EFFORT_NOTICE = (
+    "I'll do my best to leave these out, but I can't guarantee it. Recipes are written by an "
+    "AI and checked by matching ingredient names. If you have a serious allergy, always check "
+    "the ingredients yourself."
+)
+
 
 def ban_display(bans: list[str]) -> list[str]:
     """Human-readable ban names for the prompt: category ids -> display, custom kept verbatim."""
-    return [_CATEGORY[b][0] if b in _CATEGORY else b for b in bans]
+    names = {**{d: v[0] for d, v in _DISLIKE.items()}, **{c: v[0] for c, v in _CATEGORY.items()}}
+    return [names.get(b, b) for b in bans]
 
 
 def _keywords(bans: list[str]) -> set[str]:
@@ -69,6 +98,8 @@ def _keywords(bans: list[str]) -> set[str]:
     for b in bans:
         if b in _CATEGORY:
             words.update(_CATEGORY[b][1])
+        elif b in _DISLIKE:
+            words.update(_DISLIKE[b][1])
         elif b.strip():
             words.add(b.strip().lower())  # custom item is its own keyword
     return words

@@ -6,6 +6,7 @@ import psycopg
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from app import onboarding
 from app.auth import CurrentUser
 from app.dates import iso_week
 from app.db import Conn
@@ -133,6 +134,8 @@ def _render_home(request: Request, conn: psycopg.Connection, user_id: int):
             "declining_slot": busy_slot,
             "error": error,
             "targets_blocked": _blocked_targets(conn, user_id),
+            "setup_left": onboarding.card_steps_left(conn, user_id),
+            "has_bans": bool(load_preferences(conn, user_id).bans),
         },
     )
 

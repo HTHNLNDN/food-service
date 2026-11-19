@@ -1,0 +1,37 @@
+{% extends "onboarding/_layout.html" %}
+{% macro chips(items) %}
+<div class="chip-grid">
+  {% for value, label in items %}
+  <label class="chip"><input type="checkbox" name="bans" value="{{ value }}"{% if value in prefs.bans %} checked{% endif %}> {{ label }}</label>
+  {% endfor %}
+</div>
+{% endmacro %}
+{% block bubble %}Anything you'd like me to leave out of your dinners?{% endblock %}
+{% block why %}
+<p class="muted why">So I don't plan dinners you won't eat.</p>
+<details class="why-more"><summary>Why?</summary>
+  <p>I ask the AI to avoid these, then check every ingredient name against your list and swap
+  out any dinner that slips through.</p>
+</details>
+<p class="notice">{{ best_effort_notice }}</p>
+{% endblock %}
+{% block form %}
+<fieldset><legend>Diets</legend>{{ chips(diet_chips) }}</fieldset>
+<fieldset><legend>Allergies &amp; intolerances</legend>{{ chips(allergy_chips) }}</fieldset>
+<fieldset><legend>Just not a fan</legend>
+  <div class="chip-grid">
+    {% for value, label in dislike_chips %}
+    <label class="chip"><input type="checkbox" name="bans" value="{{ value }}"{% if value in prefs.bans %} checked{% endif %}> {{ label }}</label>
+    {% endfor %}
+    {% for item in custom_bans %}
+    <label class="chip"><input type="checkbox" name="bans" value="{{ item }}" checked> {{ item }}</label>
+    {% endfor %}
+  </div>
+</fieldset>
+<label>Add your own (comma-separated)
+  <input type="text" name="bans_custom" placeholder="e.g. sesame, celery">
+  <small class="muted">{{ free_text_hint }}</small>
+</label>
+<button type="submit" name="action" value="next">Next</button>
+<button type="submit" name="action" value="skip" class="secondary">Skip</button>
+{% endblock %}

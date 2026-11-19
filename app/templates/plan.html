@@ -27,6 +27,15 @@
   </div>
 </div>
 
+{% if setup_left %}
+<div class="notice setup-card">
+  <a class="link" href="/onboarding">Finish setting up ({{ setup_left }} step{{ "" if setup_left == 1 else "s" }} left)</a>
+  <form method="post" action="/onboarding/dismiss">
+    <button type="submit" class="quiet">Not now</button>
+  </form>
+</div>
+{% endif %}
+
 {% if error %}<p class="error">⚠ {{ error }}</p>{% endif %}
 {% if targets_blocked %}
 <div class="error" role="alert">
@@ -52,6 +61,7 @@ in <code>.env</code> to enable planning (see <code>.env.example</code>).</p>
 <p class="lead">{{ t("No plan yet. Pick your preferences, then plan the week.") }}</p>
 {% else %}
 
+{% if has_bans %}<p class="notice">{{ best_effort_notice }}</p>{% endif %}
 <div class="cards">
   {% for r in plan.recipes %}
     {{ recipe_card(r, loop.index0, declining_slot) }}

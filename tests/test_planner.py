@@ -523,3 +523,16 @@ def test_decline_tells_the_agent_which_dishes_are_already_in_the_plan(conn):
     decline(conn, TEST_USER_ID, plan.id, 1, agent=agent, offers=FakeOffers([]),
             nutrition=FakeNutrition(WITHIN))
     assert agent.last_ctx.plan_dishes == ["Chicken souvlaki (greek, chicken)"]
+
+
+def test_cooking_style_from_onboarding_reaches_the_agent(conn):
+    from app import onboarding
+
+    conn = _conn(conn)
+    onboarding.start(conn, TEST_USER_ID)
+    _conn(conn)  # start() saved the defaults; restore this file's test targets
+    onboarding.save_cooking_style(conn, TEST_USER_ID, "No deep-frying")
+    agent = FakeAgent([_recipe("A")], _recipe("R"))
+    generate_plan(conn, TEST_USER_ID, agent=agent, offers=FakeOffers([]),
+                  nutrition=FakeNutrition(WITHIN), num_dinners=1)
+    assert agent.last_ctx.cooking_style == "No deep-frying"
